@@ -73,7 +73,7 @@ impl Source {
                     .into();
                 let mut response = agent
                     .get(url.as_str())
-                    .header("User-Agent", "RelayDesk/0.1 (sing-box)")
+                    .header("User-Agent", "Exodys/0.1 (sing-box)")
                     .call()
                     .map_err(|error| match error {
                         ureq::Error::StatusCode(code) => {

@@ -9,7 +9,7 @@ mod ui;
 pub use ui::App;
 
 #[cfg(target_os = "macos")]
-#[nsh_core::prelude::native_module("app/relay-desk")]
+#[nsh_core::prelude::native_module("app/exodys")]
 fn native(registry: &mut nsh_core::prelude::Registry) {
     registry.register::<App>();
 }

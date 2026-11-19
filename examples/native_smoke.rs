@@ -14,6 +14,11 @@ mod macos {
     use std::path::Path;
     use std::time::{Duration, Instant};
 
+    use exodys::{
+        engine::address,
+        import::Source,
+        session::{Job, Session},
+    };
     use native::objc2::{MainThreadMarker, MainThreadOnly, Message, msg_send, rc::Retained};
     use native::objc2_app_kit::{
         NSAccessibility, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType,
@@ -24,17 +29,12 @@ mod macos {
         NSDate, NSDictionary, NSPoint, NSRange, NSRect, NSRunLoop, NSSize, NSString,
     };
     use nsh_platform_macos as native;
-    use relay_desk::{
-        engine::address,
-        import::Source,
-        session::{Job, Session},
-    };
 
     pub fn run() {
         let screenshots = std::env::args_os().nth(1).map(std::path::PathBuf::from);
         let directory = tempfile::tempdir().unwrap();
         // This is a standalone test process. Set its workspace before AppKit or NSH starts threads.
-        unsafe { std::env::set_var("RELAY_DESK_DATA_DIR", directory.path()) };
+        unsafe { std::env::set_var("EXODYS_DATA_DIR", directory.path()) };
         let port = TcpListener::bind(("127.0.0.1", 0))
             .unwrap()
             .local_addr()
@@ -73,7 +73,7 @@ mod macos {
         };
         // Retained by this scope through close.
         unsafe { window.setReleasedWhenClosed(false) };
-        window.setTitle(&NSString::from_str("Relay Desk"));
+        window.setTitle(&NSString::from_str("Exodys"));
         let surface = native::AppView::new(
             mtm,
             native::AppOptions {
@@ -84,7 +84,7 @@ mod macos {
         let root = surface.view();
         window.setContentView(Some(&root));
         let start = Instant::now();
-        surface.load(native::App::Rust(native::Root::of::<relay_desk::App>()));
+        surface.load(native::App::Rust(native::Root::of::<exodys::App>()));
         window.makeKeyAndOrderFront(None);
         app.activate();
         let search = until("native search field", || by_id(&root, "node-search"));

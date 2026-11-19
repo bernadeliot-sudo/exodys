@@ -1,6 +1,6 @@
 {
-  "name": "Relay Desk",
-  "id": "io.github.bernadeliot-sudo.relay-desk",
+  "name": "Exodys",
+  "id": "io.github.bernadeliot-sudo.exodys",
   "version": "0.1.0",
   "description": "Manage proxy profiles and connect to sing-box on macOS.",
   "appearance": "system",

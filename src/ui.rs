@@ -177,7 +177,7 @@ impl Ui {
             let result = blocking(move || {
                 let mut session = session
                     .lock()
-                    .map_err(|_| "无法完成操作。请重新打开 Relay Desk。".to_owned())?;
+                    .map_err(|_| "无法完成操作。请重新打开 Exodys。".to_owned())?;
                 let outcome = session.run(job);
                 Ok::<_, String>((session.snapshot(), outcome))
             })
@@ -279,7 +279,7 @@ fn sidebar(ui: Ui) -> impl IntoElement {
                 .gap(px(3.0))
                 .pb(px(9.0))
                 .child(
-                    text("Relay Desk")
+                    text("Exodys")
                         .text_size(px(24.0))
                         .font_weight(FontWeight::BOLD),
                 )

@@ -17,11 +17,11 @@ pub fn address(port: u16) -> SocketAddr {
 }
 
 pub fn engine_path() -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os("RELAY_DESK_SING_BOX") {
+    if let Some(path) = std::env::var_os("EXODYS_SING_BOX") {
         let path = PathBuf::from(path);
         return (path.is_absolute() && path.is_file())
             .then_some(path)
-            .ok_or_else(|| "RELAY_DESK_SING_BOX 必须指向 sing-box 可执行文件。".into());
+            .ok_or_else(|| "EXODYS_SING_BOX 必须指向 sing-box 可执行文件。".into());
     }
     let paths = std::env::var_os("PATH").unwrap_or_default();
     std::env::split_paths(&paths)

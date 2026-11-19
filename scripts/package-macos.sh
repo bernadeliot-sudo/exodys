@@ -2,7 +2,7 @@
 set -eu
 
 if [ "$(uname -s)" != Darwin ]; then
-    printf '%s\n' 'Relay Desk must be packaged on macOS.' >&2
+    printf '%s\n' 'Exodys must be packaged on macOS.' >&2
     exit 1
 fi
 
@@ -19,7 +19,7 @@ output=$(mktemp -d "$project/.nsh/out/package.XXXXXX")
 app="$output/$name.app"
 contents="$app/Contents"
 mkdir -p "$contents/MacOS" "$contents/Resources"
-install -m 755 "$project/target/release/relay-desk" "$contents/MacOS/relay-desk"
+install -m 755 "$project/target/release/exodys" "$contents/MacOS/exodys"
 install -m 644 LICENSE "$contents/Resources/LICENSE"
 
 plist="$contents/Info.plist"
@@ -29,12 +29,12 @@ plist="$contents/Info.plist"
 /usr/bin/plutil -insert CFBundleIdentifier -string "$identifier" "$plist"
 /usr/bin/plutil -insert CFBundleVersion -string "$version" "$plist"
 /usr/bin/plutil -insert CFBundleShortVersionString -string "$version" "$plist"
-/usr/bin/plutil -insert CFBundleExecutable -string relay-desk "$plist"
+/usr/bin/plutil -insert CFBundleExecutable -string exodys "$plist"
 /usr/bin/plutil -insert CFBundlePackageType -string APPL "$plist"
 /usr/bin/plutil -insert NSHighResolutionCapable -bool YES "$plist"
 /usr/bin/codesign --sign - "$app"
 /usr/bin/codesign --verify --strict "$app"
 
-archive="$output/Relay-Desk-$version-macos-$(uname -m).zip"
+archive="$output/Exodys-$version-macos-$(uname -m).zip"
 /usr/bin/ditto -c -k --keepParent "$app" "$archive"
 printf '%s\n' "$app" "$archive"

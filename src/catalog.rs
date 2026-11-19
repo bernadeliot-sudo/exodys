@@ -238,7 +238,7 @@ impl Store {
             .open(root.join("workspace.lock"))
             .map_err(|_| "无法打开应用数据文件夹。".to_owned())?;
         fs2::FileExt::try_lock_exclusive(&lock)
-            .map_err(|_| "此数据文件夹已由另一个 Relay Desk 窗口打开。".to_owned())?;
+            .map_err(|_| "此数据文件夹已由另一个 Exodys 窗口打开。".to_owned())?;
         Ok(Self { root, _lock: lock })
     }
 
@@ -316,13 +316,13 @@ impl Store {
 }
 
 pub fn default_directory() -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os("RELAY_DESK_DATA_DIR") {
+    if let Some(path) = std::env::var_os("EXODYS_DATA_DIR") {
         let path = PathBuf::from(path);
         if !path.is_absolute() {
-            return Err("RELAY_DESK_DATA_DIR 必须是绝对路径。".into());
+            return Err("EXODYS_DATA_DIR 必须是绝对路径。".into());
         }
         return Ok(path);
     }
     let home = std::env::var_os("HOME").ok_or("找不到用户目录。")?;
-    Ok(PathBuf::from(home).join("Library/Application Support/Relay Desk"))
+    Ok(PathBuf::from(home).join("Library/Application Support/Exodys"))
 }

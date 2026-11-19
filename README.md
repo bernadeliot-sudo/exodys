@@ -1,6 +1,6 @@
-# Relay Desk
+# Exodys
 
-Relay Desk 是独立开发的 macOS 代理客户端。它使用 Rust 和 [Native Shell](https://nsh.dev/) 0.6.0 渲染原生 AppKit 界面，以本机安装的 [sing-box](https://sing-box.sagernet.org/) 驱动 HTTP 和 SOCKS5 代理。
+Exodys 是独立开发的 macOS 代理客户端。它使用 Rust 和 [Native Shell](https://nsh.dev/) 0.6.0 渲染原生 AppKit 界面，以本机安装的 [sing-box](https://sing-box.sagernet.org/) 驱动 HTTP 和 SOCKS5 代理。
 
 ## 使用
 
@@ -12,11 +12,11 @@ Relay Desk 是独立开发的 macOS 代理客户端。它使用 Rust 和 [Native
 
 当前范围是 macOS 本机代理。应用级或手动设置的系统代理需要填入本地地址。TUN、自动系统代理、路由规则迁移及 Karing 备份恢复尚未实现。
 
-配置文件存储在 `~/Library/Application Support/Relay Desk`。订阅地址和节点认证随配置保存在权限为 `0600` 的本地文件中，可能包含敏感信息。开发与测试可将 `RELAY_DESK_DATA_DIR` 指向一个单独的绝对路径。
+配置文件存储在 `~/Library/Application Support/Exodys`。订阅地址和节点认证随配置保存在权限为 `0600` 的本地文件中，可能包含敏感信息。开发与测试可将 `EXODYS_DATA_DIR` 指向一个单独的绝对路径。
 
 ## 构建
 
-在 macOS 上使用 Cargo、项目固定的 Rust 1.97.1 和 Xcode Command Line Tools。安装 sing-box 后即可实际连接。Relay Desk 会查找 `PATH`、`/opt/homebrew/bin` 和 `/usr/local/bin` 中的 `sing-box`，也可通过 `RELAY_DESK_SING_BOX` 指定绝对路径。
+在 macOS 上使用 Cargo、项目固定的 Rust 1.97.1 和 Xcode Command Line Tools。安装 sing-box 后即可实际连接。Exodys 会查找 `PATH`、`/opt/homebrew/bin` 和 `/usr/local/bin` 中的 `sing-box`，也可通过 `EXODYS_SING_BOX` 指定绝对路径。
 
 ```bash
 brew install sing-box
@@ -47,7 +47,7 @@ cargo test --locked --test proxy -- --ignored
 运行实际 AppKit 窗口，验证输入、连接、断开并生成截图。此驱动使用隔离测试目录，不需要系统级录屏或辅助功能权限。
 
 ```bash
-cargo run --locked --example native_smoke -- .nsh/out/Relay-Desk-preview.png
+cargo run --locked --example native_smoke -- .nsh/out/Exodys-preview.png
 ```
 
 ## 性能基线
@@ -64,8 +64,8 @@ cargo run --locked --example native_smoke -- .nsh/out/Relay-Desk-preview.png
 cargo test --locked --release --test performance -- --ignored --nocapture
 ```
 
-以上计时覆盖数据处理。窗口渲染、首次启动、内存和流量转发需使用相同的配置与运行状态另行对照。
+以上仅为 Exodys 的数据处理计时，不包含窗口渲染、首次启动、内存占用或流量转发。
 
 ## 许可证
 
-Relay Desk 的源代码采用 [Apache-2.0](LICENSE) 许可。项目参考 [Karing](https://github.com/KaringX/karing) 的使用流程，独立实现界面和配置转换，未引入其源代码或美术素材。Native Shell 由 Longbridge 开发，采用 Apache-2.0 许可。sing-box 独立安装并遵循其自身许可证。
+Exodys 的源代码采用 [Apache-2.0](LICENSE) 许可。项目参考 [Karing](https://github.com/KaringX/karing) 的使用流程，独立实现界面和配置转换，未引入其源代码或美术素材。Native Shell 由 Longbridge 开发，采用 Apache-2.0 许可。sing-box 独立安装并遵循其自身许可证。

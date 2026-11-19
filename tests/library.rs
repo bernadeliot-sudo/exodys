@@ -3,7 +3,7 @@ use std::net::TcpListener;
 use std::time::{Duration, Instant};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use relay_desk::{
+use exodys::{
     import::{MAX_BYTES, Source, parse},
     session::{Job, Session},
 };
@@ -66,7 +66,7 @@ fn workspace_persists_profile_selection_and_port() {
     assert_eq!(profile.search("tokyo HTTP").at(0), Some(1));
     assert!(profile.search("absent").is_empty());
     session
-        .run(Job::Select(relay_desk::catalog::NodeRef {
+        .run(Job::Select(exodys::catalog::NodeRef {
             profile: id,
             node: profile.nodes[1].id.clone(),
         }))

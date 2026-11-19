@@ -3,7 +3,7 @@ use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use relay_desk::{
+use exodys::{
     catalog::NodeRef,
     engine::{address, engine_path},
     import::Source,
