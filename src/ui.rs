@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use nsh_base::{button, input};
+use nsh_base::{button, input, toolbar};
 use nsh_core::desktop::WindowAttributes;
 use nsh_core::element::desktop::current_window;
 use nsh_core::file_dialog::{FileFilter, OpenDialog};
@@ -21,7 +21,9 @@ const SUBTLE: AdaptiveColor = AdaptiveColor::rgb(0x6e6e73, 0x98989d);
 const LINE: AdaptiveColor = AdaptiveColor::rgb(0xd6d6dc, 0x48484a);
 const TEAL: AdaptiveColor = AdaptiveColor::rgb(0x007aff, 0x0a84ff);
 const ON_TEAL: AdaptiveColor = AdaptiveColor::rgb(0xffffff, 0xffffff);
-const HIGHLIGHT: AdaptiveColor = AdaptiveColor::rgb(0xdbeaff, 0x354b6c);
+const HIGHLIGHT: AdaptiveColor = AdaptiveColor::rgb(0x007aff, 0x0a84ff);
+const ON_HIGHLIGHT: AdaptiveColor = AdaptiveColor::rgb(0xffffff, 0xffffff);
+const HIGHLIGHT_SUBTLE: AdaptiveColor = AdaptiveColor::rgb(0xe8f1ff, 0xd7e9ff);
 const ERROR: AdaptiveColor = AdaptiveColor::rgb(0xff3b30, 0xff6961);
 const SUCCESS: AdaptiveColor = AdaptiveColor::rgb(0x34c759, 0x30d158);
 
@@ -58,6 +60,7 @@ pub fn App() -> impl IntoElement {
         .flex_1()
         .flex_row()
         .bg(PAPER)
+        .macos_backdrop(macos_backdrop(MacOsBackdropMaterial::WindowBackground))
         .text_color(INK)
         .child(sidebar(ui))
         .child(
@@ -72,7 +75,7 @@ pub fn App() -> impl IntoElement {
                     view()
                         .flex_1()
                         .min_h(px(0.0))
-                        .p(px(20.0))
+                        .p(px(22.0))
                         .child(dynamic(move || match ui.page.get() {
                             Page::Nodes => nodes(ui).into_element(),
                             Page::Import => import_form(ui).into_element(),
@@ -338,8 +341,8 @@ fn sidebar(ui: Ui) -> impl IntoElement {
                             profile
                                 .with(|p| p.as_ref().is_some_and(|p| Some(p.id) == ui.focus.get()))
                         })
-                        .selected_style(|s| s.bg(HIGHLIGHT))
-                        .hover(|s| s.bg(HIGHLIGHT))
+                        .selected_style(|s| s.bg(HIGHLIGHT_SUBTLE))
+                        .hover(|s| s.bg(HIGHLIGHT_SUBTLE))
                         .focus(|s| s.border_color(TEAL).border_1())
                         .disabled(move || ui.busy.get().is_some())
                         .on_press(move || {
@@ -400,9 +403,10 @@ fn connection(ui: Ui) -> impl IntoElement {
     let connected = computed(move || ui.state.with(|s| s.connected));
     let selected_name = computed(move || ui.state.with(|s| s.node().map(|node| node.name.clone())));
     let socket = computed(move || ui.state.with(|s| address(s.preferences.port).to_string()));
-    view()
+    toolbar()
+        .accessibility_label("连接工具栏")
         .h(px(52.0))
-        .px(px(20.0))
+        .px(px(16.0))
         .flex_row()
         .items_center()
         .gap(px(9.0))
@@ -500,7 +504,7 @@ fn panel_button(label: &'static str, execute: impl Fn() + 'static) -> impl IntoE
         .rounded(px(6.0))
         .border_1()
         .border_color(LINE)
-        .hover(|s| s.bg(HIGHLIGHT))
+        .hover(|s| s.bg(HIGHLIGHT_SUBTLE))
         .focus(|s| s.border_color(TEAL))
         .on_press(execute)
         .child(text(label).text_size(px(12.0)).text_color(INK))
@@ -658,7 +662,8 @@ fn node_browser(ui: Ui, profile: Memo<Option<Arc<Profile>>>) -> impl IntoElement
         .flex_col()
         .gap(px(11.0))
         .child(
-            view()
+            toolbar()
+                .accessibility_label("配置工具栏")
                 .flex_row()
                 .items_center()
                 .gap(px(8.0))
@@ -727,7 +732,23 @@ fn node_browser(ui: Ui, profile: Memo<Option<Arc<Profile>>>) -> impl IntoElement
                     },
                 )),
         )
-        .child(field(ui.filter, "搜索节点名称、协议或地址", "node-search").max_length(180))
+        .child(
+            native("exodys/search-field")
+                .test_id("node-search")
+                .h(px(32.0))
+                .min_w(px(180.0))
+                .prop("value", move || ui.filter.get())
+                .prop("placeholder", || {
+                    serde_json::Value::String("搜索节点名称、协议或地址".into())
+                })
+                .on_native_event(move |event: &NativeEvent| {
+                    if &*event.name == "change"
+                        && let Some(value) = event.data.as_str()
+                    {
+                        ui.filter.set(value.to_owned());
+                    }
+                }),
+        )
         .child(
             view()
                 .flex_1()
@@ -802,7 +823,7 @@ fn node_browser(ui: Ui, profile: Memo<Option<Arc<Profile>>>) -> impl IntoElement
                                 .border_color(LINE)
                                 .selected(is_selected)
                                 .selected_style(|s| s.bg(HIGHLIGHT))
-                                .hover(|s| s.bg(HIGHLIGHT))
+                                .hover(|s| s.bg(HIGHLIGHT_SUBTLE))
                                 .focus(|s| s.border_color(TEAL).border_1())
                                 .disabled(move || ui.busy.get().is_some())
                                 .on_press(move || {
@@ -828,11 +849,20 @@ fn node_browser(ui: Ui, profile: Memo<Option<Arc<Profile>>>) -> impl IntoElement
                                         .child(
                                             text(move || row.with(|r| r.name.clone()))
                                                 .font_weight(FontWeight::MEDIUM)
+                                                .text_color(move || {
+                                                    if is_selected() { ON_HIGHLIGHT } else { INK }
+                                                })
                                                 .truncate(),
                                         )
                                         .child(
                                             text(move || row.with(|r| r.endpoint.clone()))
-                                                .text_color(SUBTLE)
+                                                .text_color(move || {
+                                                    if is_selected() {
+                                                        ON_HIGHLIGHT
+                                                    } else {
+                                                        SUBTLE
+                                                    }
+                                                })
                                                 .text_size(px(11.0))
                                                 .truncate(),
                                         ),
@@ -841,14 +871,18 @@ fn node_browser(ui: Ui, profile: Memo<Option<Arc<Profile>>>) -> impl IntoElement
                                     text(move || row.with(|r| r.protocol.clone()))
                                         .w(px(83.0))
                                         .text_size(px(12.0))
-                                        .text_color(SUBTLE)
+                                        .text_color(move || {
+                                            if is_selected() { ON_HIGHLIGHT } else { SUBTLE }
+                                        })
                                         .truncate(),
                                 )
                                 .child(
                                     text(move || if is_selected() { "已选中" } else { "" })
                                         .w(px(62.0))
                                         .text_size(px(12.0))
-                                        .text_color(TEAL),
+                                        .text_color(move || {
+                                            if is_selected() { ON_HIGHLIGHT } else { TEAL }
+                                        }),
                                 )
                         },
                     )

@@ -74,13 +74,12 @@ mod macos {
         // Retained by this scope through close.
         unsafe { window.setReleasedWhenClosed(false) };
         window.setTitle(&NSString::from_str("Exodys"));
-        let surface = native::AppView::new(
-            mtm,
-            native::AppOptions {
-                size: (960, 700),
-                ..Default::default()
-            },
-        );
+        let options = native::AppOptions {
+            size: (960, 700),
+            ..Default::default()
+        };
+        exodys::register_native_components(&options.components);
+        let surface = native::AppView::new(mtm, options);
         let root = surface.view();
         window.setContentView(Some(&root));
         let start = Instant::now();

@@ -22,6 +22,7 @@ url = "2.5"
 nsh-core = "=0.6.0"
 nsh-base = { version = "=0.6.0", default-features = false }
 nsh-platform-macos = { version = "=0.6.0", default-features = false }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSAccessibility", "NSAccessibilityProtocols", "NSControl", "NSResponder", "NSView", "NSTextField", "NSSearchField"] }
 
 [profile.release]
 strip = "debuginfo"
