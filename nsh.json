@@ -1,0 +1,13 @@
+{
+  "name": "Relay Desk",
+  "id": "io.github.bernadeliot-sudo.relay-desk",
+  "version": "0.1.0",
+  "description": "Manage proxy profiles and connect to sing-box on macOS.",
+  "appearance": "system",
+  "rust": ".",
+  "root": "App",
+  "window": {
+    "size": { "width": 960, "height": 700 },
+    "minSize": { "width": 740, "height": 560 }
+  }
+}

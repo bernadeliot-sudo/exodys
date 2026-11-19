@@ -1,0 +1,28 @@
+[package]
+name = "relay-desk"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+description = "Native macOS client for proxy profiles and sing-box"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+fs2 = "0.4"
+percent-encoding = "2.3"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+serde-saphyr = { version = "1.3", default-features = false, features = ["deserialize"] }
+tempfile = "3"
+ureq = "3.5"
+url = "2.5"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+nsh-core = "=0.6.0"
+nsh-base = { version = "=0.6.0", default-features = false }
+nsh-platform-macos = { version = "=0.6.0", default-features = false }
+
+[profile.release]
+strip = "debuginfo"
+lto = "thin"
