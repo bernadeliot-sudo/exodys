@@ -22,6 +22,19 @@ mkdir -p "$contents/MacOS" "$contents/Resources"
 install -m 755 "$project/target/release/exodys" "$contents/MacOS/exodys"
 install -m 644 LICENSE "$contents/Resources/LICENSE"
 
+icon_work=$(mktemp -d "${TMPDIR:-/tmp}/exodys-icon.XXXXXX")
+trap 'rm -rf -- "$icon_work"' EXIT
+iconset="$icon_work/Exodys.iconset"
+mkdir "$iconset"
+for size in 16 32 128 256 512; do
+    retina=$((size * 2))
+    /usr/bin/sips -z "$size" "$size" assets/Exodys.png \
+        --out "$iconset/icon_${size}x${size}.png" >/dev/null
+    /usr/bin/sips -z "$retina" "$retina" assets/Exodys.png \
+        --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
+done
+/usr/bin/iconutil -c icns "$iconset" -o "$contents/Resources/Exodys.icns"
+
 plist="$contents/Info.plist"
 /usr/bin/plutil -create xml1 "$plist"
 /usr/bin/plutil -insert CFBundleName -string "$name" "$plist"
@@ -31,6 +44,7 @@ plist="$contents/Info.plist"
 /usr/bin/plutil -insert CFBundleShortVersionString -string "$version" "$plist"
 /usr/bin/plutil -insert CFBundleExecutable -string exodys "$plist"
 /usr/bin/plutil -insert CFBundlePackageType -string APPL "$plist"
+/usr/bin/plutil -insert CFBundleIconFile -string Exodys.icns "$plist"
 /usr/bin/plutil -insert NSHighResolutionCapable -bool YES "$plist"
 /usr/bin/codesign --sign - "$app"
 /usr/bin/codesign --verify --strict "$app"

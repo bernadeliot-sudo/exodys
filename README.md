@@ -26,7 +26,7 @@ brew install sing-box
 cargo run --locked --release
 ```
 
-本地打包脚本生成临时签名的 `.app` 和 ZIP，放在 `.nsh/out/`。跨机器分发时可用 Developer ID 签名并公证。
+本地打包脚本从 [图标源文件](assets/Exodys.png) 生成 Finder 和 Dock 使用的图标，并在 `.nsh/out/` 输出临时签名的 `.app` 和 ZIP。跨机器分发时可用 Developer ID 签名并公证。
 
 ```bash
 sh scripts/package-macos.sh

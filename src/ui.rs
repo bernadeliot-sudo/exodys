@@ -12,16 +12,26 @@ use crate::engine::address;
 use crate::import::{MAX_BYTES, Source};
 use crate::session::{Job, Session, Snapshot};
 
-const PAPER: AdaptiveColor = AdaptiveColor::rgb(0xf4f7f7, 0x121b1d);
-const SIDEBAR: AdaptiveColor = AdaptiveColor::rgb(0xe9efef, 0x192426);
-const SURFACE: AdaptiveColor = AdaptiveColor::rgb(0xffffff, 0x1b282a);
-const INK: AdaptiveColor = AdaptiveColor::rgb(0x162b2c, 0xf0f7f6);
-const SUBTLE: AdaptiveColor = AdaptiveColor::rgb(0x496263, 0xa9bfbe);
-const LINE: AdaptiveColor = AdaptiveColor::rgb(0xc8d6d5, 0x36494c);
-const TEAL: AdaptiveColor = AdaptiveColor::rgb(0x10635c, 0x91dccf);
-const ON_TEAL: AdaptiveColor = AdaptiveColor::rgb(0xffffff, 0x15302c);
-const HIGHLIGHT: AdaptiveColor = AdaptiveColor::rgb(0xdbefea, 0x25403e);
-const ERROR: AdaptiveColor = AdaptiveColor::rgb(0x9b2d24, 0xffb5ac);
+// macOS semantic colors: quiet surfaces, system blue for actions, and a
+// source-list selection tint instead of the previous dashboard palette.
+const PAPER: AdaptiveColor = AdaptiveColor::rgb(0xf5f5f7, 0x1c1c1e);
+const SURFACE: AdaptiveColor = AdaptiveColor::rgb(0xffffff, 0x2c2c2e);
+const INK: AdaptiveColor = AdaptiveColor::rgb(0x1d1d1f, 0xf5f5f7);
+const SUBTLE: AdaptiveColor = AdaptiveColor::rgb(0x6e6e73, 0x98989d);
+const LINE: AdaptiveColor = AdaptiveColor::rgb(0xd6d6dc, 0x48484a);
+const TEAL: AdaptiveColor = AdaptiveColor::rgb(0x007aff, 0x0a84ff);
+const ON_TEAL: AdaptiveColor = AdaptiveColor::rgb(0xffffff, 0xffffff);
+const HIGHLIGHT: AdaptiveColor = AdaptiveColor::rgb(0xdbeaff, 0x354b6c);
+const ERROR: AdaptiveColor = AdaptiveColor::rgb(0xff3b30, 0xff6961);
+const SUCCESS: AdaptiveColor = AdaptiveColor::rgb(0x34c759, 0x30d158);
+
+fn macos_backdrop(material: MacOsBackdropMaterial) -> MacOsBackdrop {
+    let mut backdrop = MacOsBackdrop::default();
+    backdrop.material = material;
+    backdrop.blending = MacOsBackdropBlending::WithinWindow;
+    backdrop.state = MacOsBackdropState::FollowsWindowActiveState;
+    backdrop
+}
 
 #[component]
 pub fn App() -> impl IntoElement {
@@ -54,17 +64,23 @@ pub fn App() -> impl IntoElement {
             view()
                 .flex_1()
                 .min_w(px(0.0))
-                .gap(px(18.0))
-                .p(px(24.0))
+                .flex_col()
+                .bg(PAPER)
                 .child(connection(ui))
                 .child(feedback(ui))
-                .child(dynamic(move || match ui.page.get() {
-                    Page::Nodes => nodes(ui).into_element(),
-                    Page::Import => import_form(ui).into_element(),
-                    Page::Rename(id) => rename_form(ui, id).into_element(),
-                    Page::Remove(id) => remove_form(ui, id).into_element(),
-                    Page::Settings => settings_form(ui).into_element(),
-                })),
+                .child(
+                    view()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .p(px(20.0))
+                        .child(dynamic(move || match ui.page.get() {
+                            Page::Nodes => nodes(ui).into_element(),
+                            Page::Import => import_form(ui).into_element(),
+                            Page::Rename(id) => rename_form(ui, id).into_element(),
+                            Page::Remove(id) => remove_form(ui, id).into_element(),
+                            Page::Settings => settings_form(ui).into_element(),
+                        })),
+                ),
         )
 }
 
@@ -268,25 +284,22 @@ impl Ui {
 fn sidebar(ui: Ui) -> impl IntoElement {
     let profiles = computed(move || ui.state.with(|state| state.catalog.clone()));
     view()
-        .w(px(208.0))
-        .p(px(16.0))
-        .gap(px(13.0))
+        .w(px(220.0))
+        .flex_col()
+        .p(px(12.0))
+        .gap(px(10.0))
         .border_r_1()
         .border_color(LINE)
-        .bg(SIDEBAR)
+        .macos_backdrop(macos_backdrop(MacOsBackdropMaterial::Sidebar))
         .child(
-            view()
-                .gap(px(3.0))
-                .pb(px(9.0))
-                .child(
-                    text("Exodys")
-                        .text_size(px(24.0))
-                        .font_weight(FontWeight::BOLD),
-                )
-                .child(text("本机代理").text_size(px(13.0)).text_color(SUBTLE)),
+            view().h(px(34.0)).px(px(8.0)).items_center().child(
+                text("Exodys")
+                    .text_size(px(14.0))
+                    .font_weight(FontWeight::SEMIBOLD),
+            ),
         )
         .child(action(
-            "＋ 导入配置",
+            "导入配置",
             Tone::Primary,
             move || ui.busy.get().is_some() || ui.session.with(Option::is_none),
             move || ui.form(Page::Import, ""),
@@ -296,16 +309,17 @@ fn sidebar(ui: Ui) -> impl IntoElement {
                 .flex_row()
                 .justify_between()
                 .items_center()
-                .pt(px(8.0))
+                .h(px(24.0))
+                .px(px(8.0))
                 .child(
                     text("配置")
-                        .text_size(px(13.0))
+                        .text_size(px(11.0))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(SUBTLE),
                 )
                 .child(
                     text(move || profiles.with(|c| c.profiles.len().to_string()))
-                        .text_size(px(12.0))
+                        .text_size(px(11.0))
                         .text_color(SUBTLE),
                 ),
         )
@@ -316,8 +330,8 @@ fn sidebar(ui: Ui) -> impl IntoElement {
                     let profile =
                         computed(move || profiles.with(|c| c.profiles.get(at.index()).cloned()));
                     button()
-                        .h(px(47.0))
-                        .rounded(px(8.0))
+                        .h(px(44.0))
+                        .rounded(px(6.0))
                         .px(px(9.0))
                         .justify_center()
                         .selected(move || {
@@ -332,28 +346,34 @@ fn sidebar(ui: Ui) -> impl IntoElement {
                             ui.navigate(profile.with_untracked(|p| p.as_ref().map(|p| p.id)))
                         })
                         .child(
-                            text(move || {
-                                profile.with(|p| {
-                                    p.as_ref().map(|p| p.name.clone()).unwrap_or_default()
-                                })
-                            })
-                            .font_weight(FontWeight::MEDIUM)
-                            .truncate(),
-                        )
-                        .child(
-                            text(move || {
-                                profile.with(|p| {
-                                    p.as_ref()
-                                        .map(|p| format!("{} 个节点", p.nodes.len()))
-                                        .unwrap_or_default()
-                                })
-                            })
-                            .text_size(px(11.0))
-                            .text_color(SUBTLE),
+                            view()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .gap(px(2.0))
+                                .child(
+                                    text(move || {
+                                        profile.with(|p| {
+                                            p.as_ref().map(|p| p.name.clone()).unwrap_or_default()
+                                        })
+                                    })
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .truncate(),
+                                )
+                                .child(
+                                    text(move || {
+                                        profile.with(|p| {
+                                            p.as_ref()
+                                                .map(|p| format!("{} 个节点", p.nodes.len()))
+                                                .unwrap_or_default()
+                                        })
+                                    })
+                                    .text_size(px(11.0))
+                                    .text_color(SUBTLE),
+                                ),
                         )
                 },
             )
-            .estimated_item_size(px(47.0))
+            .estimated_item_size(px(44.0))
             .flex_1()
             .empty(
                 text("暂无配置")
@@ -377,117 +397,97 @@ fn sidebar(ui: Ui) -> impl IntoElement {
 }
 
 fn connection(ui: Ui) -> impl IntoElement {
-    const BACK: u32 = 0x153538;
-    const WHITE: u32 = 0xf0f9f7;
-    const MUTED: u32 = 0xb9d5d1;
-    const GLOW: u32 = 0x9be6d8;
     let connected = computed(move || ui.state.with(|s| s.connected));
     let selected_name = computed(move || ui.state.with(|s| s.node().map(|node| node.name.clone())));
     let socket = computed(move || ui.state.with(|s| address(s.preferences.port).to_string()));
     view()
-        .bg(rgb(BACK))
-        .rounded(px(14.0))
-        .p(px(18.0))
-        .gap(px(10.0))
+        .h(px(52.0))
+        .px(px(20.0))
+        .flex_row()
+        .items_center()
+        .gap(px(9.0))
+        .border_b_1()
+        .border_color(LINE)
         .child(
             view()
-                .flex_row()
-                .items_center()
-                .gap(px(8.0))
-                .child(
-                    view()
-                        .size(px(8.0))
-                        .rounded_full()
-                        .bg(move || rgb(if connected.get() { GLOW } else { 0xa7b5b5 })),
-                )
-                .child(
-                    text(move || {
-                        if connected.get() {
-                            "本地代理运行中"
-                        } else {
-                            "本地代理已断开"
-                        }
-                    })
-                    .text_color(rgb(MUTED))
-                    .text_size(px(12.0)),
-                ),
+                .size(px(8.0))
+                .rounded_full()
+                .bg(move || if connected.get() { SUCCESS } else { SUBTLE }),
         )
         .child(
-            view()
-                .flex_row()
-                .items_center()
-                .gap(px(13.0))
-                .child(
-                    text(move || {
-                        selected_name
-                            .with(|name| name.as_deref().unwrap_or("未选择节点").to_owned())
-                    })
-                    .flex_1()
-                    .truncate()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(WHITE))
-                    .text_size(px(27.0)),
-                )
-                .child(
-                    button()
-                        .test_id("connection-toggle")
-                        .bg(rgb(GLOW))
-                        .rounded(px(8.0))
-                        .min_w(px(98.0))
-                        .h(px(38.0))
-                        .items_center()
-                        .justify_center()
-                        .disabled(move || {
-                            ui.busy.get().is_some() || selected_name.with(Option::is_none)
-                        })
-                        .disabled_style(|s| s.opacity(0.42))
-                        .hover(|s| s.bg(rgb(0xbef4e9)))
-                        .focus(|s| s.border_1().border_color(rgb(WHITE)))
-                        .on_press(move || {
-                            if connected.get_untracked() {
-                                ui.work("断开连接…", Job::Disconnect, false);
-                            } else {
-                                ui.work("启动本地代理…", Job::Connect, false);
-                            }
-                        })
-                        .child(
-                            text(move || if connected.get() { "断开" } else { "连接" })
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(BACK)),
-                        ),
-                ),
+            text(move || {
+                if connected.get() {
+                    "运行中"
+                } else {
+                    "已断开"
+                }
+            })
+            .text_size(px(12.0))
+            .text_color(SUBTLE),
         )
         .child(
-            view()
-                .flex_row()
-                .gap(px(10.0))
+            view().flex_1().min_w(px(0.0)).pl(px(7.0)).child(
+                text(move || {
+                    selected_name.with(|name| name.as_deref().unwrap_or("未选择节点").to_owned())
+                })
+                .truncate()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_size(px(14.0)),
+            ),
+        )
+        .child(
+            text(move || format!("HTTP / SOCKS5  ·  {}", socket.get()))
+                .text_size(px(11.0))
+                .text_color(SUBTLE)
+                .truncate(),
+        )
+        .child(panel_button("复制地址", move || {
+            set_clipboard(socket.get_untracked());
+            ui.notice.set(Some(Notice {
+                message: "已复制本地代理地址。".into(),
+                error: false,
+            }));
+        }))
+        .child(when(
+            move || connected.get(),
+            move || {
+                panel_button("测试代理", move || {
+                    ui.work(
+                        "通过代理发送测试请求…",
+                        Job::Probe("https://cp.cloudflare.com/generate_204".into()),
+                        false,
+                    );
+                })
+            },
+        ))
+        .child(
+            button()
+                .test_id("connection-toggle")
+                .bg(TEAL)
+                .rounded(px(6.0))
+                .min_w(px(70.0))
+                .h(px(28.0))
+                .px(px(10.0))
                 .items_center()
+                .justify_center()
+                .disabled(move || ui.busy.get().is_some() || selected_name.with(Option::is_none))
+                .disabled_style(|s| s.opacity(0.45))
+                .hover(|s| s.opacity(0.84))
+                .active(|s| s.opacity(0.68))
+                .focus(|s| s.border_1().border_color(INK))
+                .on_press(move || {
+                    if connected.get_untracked() {
+                        ui.work("断开连接…", Job::Disconnect, false);
+                    } else {
+                        ui.work("启动本地代理…", Job::Connect, false);
+                    }
+                })
                 .child(
-                    text(move || format!("{}  HTTP / SOCKS5", socket.get()))
-                        .flex_1()
-                        .truncate()
+                    text(move || if connected.get() { "断开" } else { "连接" })
+                        .font_weight(FontWeight::MEDIUM)
                         .text_size(px(12.0))
-                        .text_color(rgb(MUTED)),
-                )
-                .child(panel_button("复制地址", move || {
-                    set_clipboard(socket.get_untracked());
-                    ui.notice.set(Some(Notice {
-                        message: "已复制本地代理地址。".into(),
-                        error: false,
-                    }));
-                }))
-                .child(when(
-                    move || connected.get(),
-                    move || {
-                        panel_button("测试代理", move || {
-                            ui.work(
-                                "通过代理发送测试请求…",
-                                Job::Probe("https://cp.cloudflare.com/generate_204".into()),
-                                false,
-                            );
-                        })
-                    },
-                )),
+                        .text_color(ON_TEAL),
+                ),
         )
 }
 
@@ -499,11 +499,11 @@ fn panel_button(label: &'static str, execute: impl Fn() + 'static) -> impl IntoE
         .items_center()
         .rounded(px(6.0))
         .border_1()
-        .border_color(rgb(0x527673))
-        .hover(|s| s.bg(rgb(0x27504d)))
-        .focus(|s| s.border_color(rgb(0x9be6d8)))
+        .border_color(LINE)
+        .hover(|s| s.bg(HIGHLIGHT))
+        .focus(|s| s.border_color(TEAL))
         .on_press(execute)
-        .child(text(label).text_size(px(12.0)).text_color(rgb(0xe0f5f1)))
+        .child(text(label).text_size(px(12.0)).text_color(INK))
 }
 
 fn feedback(ui: Ui) -> impl IntoElement {
@@ -655,6 +655,7 @@ fn node_browser(ui: Ui, profile: Memo<Option<Arc<Profile>>>) -> impl IntoElement
     view()
         .flex_1()
         .min_h(px(0.0))
+        .flex_col()
         .gap(px(11.0))
         .child(
             view()
@@ -743,6 +744,7 @@ fn node_browser(ui: Ui, profile: Memo<Option<Arc<Profile>>>) -> impl IntoElement
                         .px(px(12.0))
                         .border_b_1()
                         .border_color(LINE)
+                        .macos_backdrop(macos_backdrop(MacOsBackdropMaterial::HeaderView))
                         .child(text("节点").flex_1().text_color(SUBTLE).text_size(px(12.0)))
                         .child(
                             text("协议")
