@@ -16,7 +16,7 @@ Exodys 是独立开发的 macOS 代理客户端。它使用 Rust 和 [Native She
 
 ## 构建
 
-在 macOS 上使用 Cargo、项目固定的 Rust 1.97.1 和 Xcode Command Line Tools。安装 sing-box 后即可实际连接。Exodys 会查找 `PATH`、`/opt/homebrew/bin` 和 `/usr/local/bin` 中的 `sing-box`，也可通过 `EXODYS_SING_BOX` 指定绝对路径。
+在 macOS 上使用 Cargo、项目固定的 Rust 1.100.0 和 Xcode Command Line Tools。安装 sing-box 后即可实际连接。Exodys 会查找 `PATH`、`/opt/homebrew/bin` 和 `/usr/local/bin` 中的 `sing-box`，也可通过 `EXODYS_SING_BOX` 指定绝对路径。
 
 ```bash
 brew install sing-box
