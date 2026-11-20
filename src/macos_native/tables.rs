@@ -7,9 +7,11 @@ use nsh_platform_macos::{
         runtime::ProtocolObject,
     },
     objc2_app_kit::{
-        NSAccessibility, NSAutoresizingMaskOptions, NSControlTextEditingDelegate, NSScrollView,
-        NSTableCellView, NSTableColumn, NSTableView, NSTableViewDataSource, NSTableViewDelegate,
-        NSTableViewStyle, NSTextField, NSUserInterfaceItemIdentification, NSView,
+        NSAccessibility, NSAutoresizingMaskOptions, NSColor, NSControlTextEditingDelegate, NSFont,
+        NSFontWeightMedium, NSLineBreakMode, NSScrollView, NSTableCellView, NSTableColumn,
+        NSTableColumnResizingOptions, NSTableView, NSTableViewColumnAutoresizingStyle,
+        NSTableViewDataSource, NSTableViewDelegate, NSTableViewStyle, NSTextAlignment, NSTextField,
+        NSUserInterfaceItemIdentification, NSView,
     },
     objc2_foundation::{
         NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize,
@@ -87,11 +89,11 @@ impl Table {
             TableKind::Profiles => NSTableViewStyle::Plain,
             TableKind::Nodes => NSTableViewStyle::Inset,
         });
-        table.setRowHeight(match kind {
-            TableKind::Profiles => 30.0,
-            TableKind::Nodes => 29.0,
-        });
-        table.setIntercellSpacing(NSSize::new(0.0, 0.0));
+        table.setRowHeight(42.0);
+        table.setIntercellSpacing(NSSize::new(0.0, 2.0));
+        table.setColumnAutoresizingStyle(
+            NSTableViewColumnAutoresizingStyle::FirstColumnOnlyAutoresizingStyle,
+        );
         table.setAccessibilityIdentifier(Some(&NSString::from_str(match kind {
             TableKind::Profiles => "native-profile-table",
             TableKind::Nodes => "native-node-table",
@@ -101,19 +103,15 @@ impl Table {
             TableKind::Nodes => "节点列表",
         })));
 
-        match kind {
-            TableKind::Profiles => {
-                table.addTableColumn(&column(mtm, "name", "配置", 126.0));
-                table.addTableColumn(&column(mtm, "count", "节点", 62.0));
-                table.setHeaderView(None);
-                table.setBackgroundColor(&nsh_platform_macos::objc2_app_kit::NSColor::clearColor());
-            }
-            TableKind::Nodes => {
-                table.addTableColumn(&column(mtm, "name", "节点", 260.0));
-                table.addTableColumn(&column(mtm, "protocol", "协议", 100.0));
-                table.addTableColumn(&column(mtm, "endpoint", "地址", 220.0));
-            }
-        }
+        let column = NSTableColumn::initWithIdentifier(
+            NSTableColumn::alloc(mtm),
+            &NSString::from_str("entry"),
+        );
+        column.setMinWidth(0.0);
+        column.setResizingMask(NSTableColumnResizingOptions::AutoresizingMask);
+        table.addTableColumn(&column);
+        table.setHeaderView(None);
+        table.setBackgroundColor(&NSColor::clearColor());
 
         let data = Rc::new(RefCell::new(TableData::default()));
         let target: Retained<TableTarget> = unsafe {
@@ -248,17 +246,107 @@ impl NativeComponent for Table {
     }
 }
 
-fn column(
-    mtm: MainThreadMarker,
-    identifier: &str,
-    title: &str,
-    width: f64,
-) -> Retained<NSTableColumn> {
-    let identifier = NSString::from_str(identifier);
-    let column = NSTableColumn::initWithIdentifier(NSTableColumn::alloc(mtm), &identifier);
-    column.setTitle(&NSString::from_str(title));
-    column.setWidth(width);
-    column
+struct RowContent {
+    title: String,
+    detail: String,
+    accessory: Option<String>,
+}
+
+struct RowLabels {
+    title: Retained<NSTextField>,
+    detail: Retained<NSTextField>,
+    accessory: Option<Retained<NSTextField>>,
+}
+
+define_class!(
+    #[unsafe(super(
+        NSTableCellView,
+        NSView,
+        nsh_platform_macos::objc2_app_kit::NSResponder,
+        NSObject
+    ))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = RowLabels]
+    #[name = "ExodysListCell"]
+    struct ListCell;
+);
+
+impl ListCell {
+    fn new(table: &NSTableView, column: &NSTableColumn, kind: TableKind) -> Retained<Self> {
+        let mtm = table.mtm();
+        let title = row_label(mtm, 13.0, false);
+        title.setFont(Some(&NSFont::systemFontOfSize_weight(13.0, unsafe {
+            NSFontWeightMedium
+        })));
+        let detail = row_label(mtm, 11.0, true);
+        let accessory = (kind == TableKind::Nodes).then(|| {
+            let label = row_label(mtm, 11.0, true);
+            label.setAlignment(NSTextAlignment::Right);
+            label
+        });
+        let frame = NSRect::new(
+            NSPoint::ZERO,
+            NSSize::new(column.width(), table.rowHeight()),
+        );
+        let cell: Retained<Self> = unsafe {
+            msg_send![super(Self::alloc(mtm).set_ivars(RowLabels { title, detail, accessory })), initWithFrame: frame]
+        };
+        cell.setIdentifier(Some(&column.identifier()));
+        let labels = cell.ivars();
+        let inset = 12.0;
+        let accessory_width = if labels.accessory.is_some() {
+            82.0
+        } else {
+            0.0
+        };
+        let available = (frame.size.width - 2.0 * inset - accessory_width).max(0.0);
+        for (label, y) in [(&labels.title, 21.0), (&labels.detail, 6.0)] {
+            label.setFrame(NSRect::new(
+                NSPoint::new(inset, y),
+                NSSize::new(available, label.intrinsicContentSize().height),
+            ));
+            label.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
+            cell.addSubview(label);
+        }
+        unsafe { cell.setTextField(Some(&labels.title)) };
+        if let Some(label) = &labels.accessory {
+            let height = label.intrinsicContentSize().height;
+            label.setFrame(NSRect::new(
+                NSPoint::new(
+                    frame.size.width - inset - accessory_width + 12.0,
+                    (frame.size.height - height) * 0.5,
+                ),
+                NSSize::new(accessory_width - 12.0, height),
+            ));
+            label.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinXMargin);
+            cell.addSubview(label);
+        }
+        cell
+    }
+
+    fn update(&self, row: RowContent) {
+        let labels = self.ivars();
+        labels.title.setStringValue(&NSString::from_str(&row.title));
+        labels
+            .detail
+            .setStringValue(&NSString::from_str(&row.detail));
+        if let Some(label) = &labels.accessory {
+            label.setStringValue(&NSString::from_str(
+                row.accessory.as_deref().unwrap_or_default(),
+            ));
+        }
+    }
+}
+
+fn row_label(mtm: MainThreadMarker, size: f64, secondary: bool) -> Retained<NSTextField> {
+    let label = NSTextField::labelWithString(&NSString::new(), mtm);
+    label.setFont(Some(&NSFont::systemFontOfSize(size)));
+    label.setMaximumNumberOfLines(1);
+    label.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+    if secondary {
+        label.setTextColor(Some(&NSColor::secondaryLabelColor()));
+    }
+    label
 }
 
 impl TargetState {
@@ -270,29 +358,27 @@ impl TargetState {
         }
     }
 
-    fn value(&self, column: Option<&NSTableColumn>, row: NSInteger) -> Option<String> {
+    fn row_content(&self, row: NSInteger) -> Option<RowContent> {
         let row = usize::try_from(row).ok()?;
-        let identifier = column?.identifier().to_string();
         let data = self.data.borrow();
-        match self.kind {
+        Some(match self.kind {
             TableKind::Profiles => {
                 let profile = data.profiles.get(row)?;
-                match identifier.as_str() {
-                    "name" => Some(profile.name.clone()),
-                    "count" => Some(format!("{} 个", profile.count)),
-                    _ => None,
+                RowContent {
+                    title: profile.name.clone(),
+                    detail: format!("{} 个节点", profile.count),
+                    accessory: None,
                 }
             }
             TableKind::Nodes => {
                 let node = data.nodes.get(row)?;
-                match identifier.as_str() {
-                    "name" => Some(node.name.clone()),
-                    "protocol" => Some(node.protocol.clone()),
-                    "endpoint" => Some(node.endpoint.clone()),
-                    _ => None,
+                RowContent {
+                    title: node.name.clone(),
+                    detail: node.endpoint.clone(),
+                    accessory: Some(node.protocol.clone()),
                 }
             }
-        }
+        })
     }
 
     fn cell(
@@ -301,35 +387,12 @@ impl TargetState {
         column: &NSTableColumn,
         row: NSInteger,
     ) -> Option<Retained<NSView>> {
-        let value = self.value(Some(column), row)?;
-        let id = column.identifier();
-        let cell = unsafe { table.makeViewWithIdentifier_owner(&id, None) }
-            .and_then(|v| v.downcast::<NSTableCellView>().ok())
-            .unwrap_or_else(|| {
-                let frame = NSRect::new(
-                    NSPoint::ZERO,
-                    NSSize::new(column.width(), table.rowHeight()),
-                );
-                let cell =
-                    NSTableCellView::initWithFrame(NSTableCellView::alloc(table.mtm()), frame);
-                cell.setIdentifier(Some(&id));
-                let label = NSTextField::labelWithString(&NSString::new(), table.mtm());
-                let height = label.intrinsicContentSize().height;
-                label.setFrame(NSRect::new(
-                    NSPoint::new(2.0, (frame.size.height - height) * 0.5),
-                    NSSize::new(frame.size.width - 4.0, height),
-                ));
-                label.setAutoresizingMask(
-                    NSAutoresizingMaskOptions::ViewWidthSizable
-                        | NSAutoresizingMaskOptions::ViewMinYMargin
-                        | NSAutoresizingMaskOptions::ViewMaxYMargin,
-                );
-                cell.addSubview(&label);
-                unsafe { cell.setTextField(Some(&label)) };
-                cell
-            });
-        unsafe { cell.textField() }?.setStringValue(&NSString::from_str(&value));
-        Some(Retained::into_super(cell))
+        let content = self.row_content(row)?;
+        let cell = unsafe { table.makeViewWithIdentifier_owner(&column.identifier(), None) }
+            .and_then(|view| view.downcast::<ListCell>().ok())
+            .unwrap_or_else(|| ListCell::new(table, column, self.kind));
+        cell.update(content);
+        Some(Retained::into_super(Retained::into_super(cell)))
     }
 
     fn select(&self, row: NSInteger) {

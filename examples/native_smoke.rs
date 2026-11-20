@@ -23,8 +23,8 @@ mod macos {
     use native::objc2_app_kit::{
         NSAccessibility, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType,
         NSBitmapImageFileType, NSBitmapImageRepPropertyKey, NSButton, NSSearchField, NSTableView,
-        NSTextField, NSTextInputClient, NSTextView, NSToolbarItem, NSView, NSWindow,
-        NSWindowStyleMask,
+        NSTextField, NSTextInputClient, NSTextView, NSView, NSWindow, NSWindowButton,
+        NSWindowStyleMask, NSWindowTitleVisibility,
     };
     use native::objc2_foundation::{
         NSDate, NSDictionary, NSIndexSet, NSPoint, NSRange, NSRect, NSRunLoop, NSSize, NSString,
@@ -80,13 +80,16 @@ mod macos {
         let app = NSApplication::sharedApplication(mtm);
         app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
         app.finishLaunching();
-        let frame = NSRect::new(NSPoint::new(120.0, 120.0), NSSize::new(960.0, 700.0));
+        let frame = NSRect::new(NSPoint::new(120.0, 120.0), NSSize::new(740.0, 560.0));
         // The test owns this window on AppKit's main thread.
         let window = unsafe {
             NSWindow::initWithContentRect_styleMask_backing_defer(
                 NSWindow::alloc(mtm),
                 frame,
-                NSWindowStyleMask::Titled | NSWindowStyleMask::Closable,
+                NSWindowStyleMask::Titled
+                    | NSWindowStyleMask::Closable
+                    | NSWindowStyleMask::Miniaturizable
+                    | NSWindowStyleMask::Resizable,
                 NSBackingStoreType::Buffered,
                 false,
             )
@@ -95,7 +98,7 @@ mod macos {
         unsafe { window.setReleasedWhenClosed(false) };
         window.setTitle(&NSString::from_str("Exodys"));
         let options = native::AppOptions {
-            size: (960, 700),
+            size: (740, 560),
             ..Default::default()
         };
         exodys::register_native_components(&options.components);
@@ -107,7 +110,25 @@ mod macos {
         window.makeKeyAndOrderFront(None);
         app.activate();
         let profiles = table(&root, "native-profile-table", 2);
-        table(&root, "native-node-table", 129);
+        let nodes = table(&root, "native-node-table", 129);
+        assert_integrated_chrome(&window, &root);
+        assert_eq!(window.title().to_string(), "Exodys");
+        let connection_actions = by_id(&root, "connection-actions").unwrap();
+        button(&connection_actions, "连接");
+        until("initial connection status", || {
+            (connection_status(&root)?.starts_with("已断开")).then_some(())
+        });
+        assert_list_row(&profiles, &["演示配置", "129 个节点"]);
+        assert_list_row(&nodes, &["Osaka relay 001", "localhost:9", "SOCKS5"]);
+        let narrow_width = nodes.rectOfColumn(0).size.width;
+        assert!(narrow_width > 300.0);
+        window.setContentSize(NSSize::new(960.0, 700.0));
+        until("node list fits wider window", || {
+            let width = nodes.rectOfColumn(0).size.width;
+            (width >= narrow_width + 210.0).then_some(())
+        });
+        assert_list_row(&nodes, &["Osaka relay 001", "localhost:9", "SOCKS5"]);
+        window.setContentSize(NSSize::new(740.0, 560.0));
         println!(
             "Mounted native tables with 129 nodes in {:.1} ms",
             start.elapsed().as_secs_f64() * 1000.0
@@ -230,27 +251,24 @@ mod macos {
         );
         assert!(window.makeFirstResponder(None));
 
-        assert!(
-            !window
-                .toolbar()
+        assert!(find_button(&connection_actions, "测试代理").is_none());
+        until("manual selection in sidebar", || {
+            (connection_status(&root)? == "已断开 · Tokyo relay").then_some(())
+        });
+        assert_eq!(
+            button(&connection_actions, "复制地址")
+                .toolTip()
                 .unwrap()
-                .items()
-                .iter()
-                .any(|item| item.itemIdentifier().to_string() == "probe")
+                .to_string(),
+            "复制地址"
         );
-        assert!(window.subtitle().to_string().contains("Tokyo relay"));
-        let copy = toolbar_item(&window, "copy", "复制地址");
-        assert!(
-            copy.toolTip()
-                .unwrap()
-                .to_string()
-                .contains(&address(port).to_string())
-        );
-        activate(&app, &toolbar_item(&window, "toggle", "连接"));
+        press(&connection_actions, "连接");
         until("sing-box SOCKS listener", || listening(port).then_some(()));
-        toolbar_item(&window, "toggle", "断开");
-        toolbar_item(&window, "probe", "测试代理");
-        assert!(window.subtitle().to_string().contains("运行中"));
+        button(&connection_actions, "断开");
+        button(&connection_actions, "测试代理");
+        until("connected status in sidebar", || {
+            (connection_status(&root)? == "运行中 · Tokyo relay").then_some(())
+        });
         press(&root, "本地端口设置");
         until("read-only connected port", || {
             let host = by_id(&root, "local-port")?;
@@ -267,15 +285,15 @@ mod macos {
             let frame = unsafe { root.superview() }.unwrap();
             screenshot(&frame, path);
         }
-        activate(&app, &toolbar_item(&window, "toggle", "断开"));
+        press(&connection_actions, "断开");
         until("listener closed", || (!listening(port)).then_some(()));
-        activate(&app, &toolbar_item(&window, "toggle", "连接"));
-        until("listener restarted", || listening(port).then_some(()));
-        toolbar_item(&window, "toggle", "断开");
-        surface.stop();
-        until("window toolbar detached on stop", || {
-            window.toolbar().is_none().then_some(())
+        until("disconnected status in sidebar", || {
+            (connection_status(&root)? == "已断开 · Tokyo relay").then_some(())
         });
+        press(&connection_actions, "连接");
+        until("listener restarted", || listening(port).then_some(()));
+        button(&connection_actions, "断开");
+        surface.stop();
         window.close();
         until("listener closed after quit", || {
             (!listening(port)).then_some(())
@@ -312,11 +330,46 @@ mod macos {
         })
     }
 
+    fn connection_status(root: &NSView) -> Option<String> {
+        let view = by_id(root, "connection-status")?;
+        let value = view.accessibilityValue()?.downcast::<NSString>().ok()?;
+        Some(value.to_string())
+    }
+
     fn table(root: &NSView, id: &str, rows: isize) -> Retained<NSTableView> {
         until(&format!("{id} with {rows} rows"), || {
             let table = by_id(root, id)?.downcast::<NSTableView>().ok()?;
             (table.numberOfRows() == rows && table.isEnabled()).then_some(table)
         })
+    }
+
+    fn assert_list_row(table: &NSTableView, expected: &[&str]) {
+        assert_eq!(table.numberOfColumns(), 1);
+        assert!(table.headerView().is_none());
+        let cell = until("two-line native list cell", || {
+            table.viewAtColumn_row_makeIfNecessary(0, 0, false)
+        });
+        let labels: Vec<_> = cell
+            .subviews()
+            .iter()
+            .filter_map(|view| view.downcast::<NSTextField>().ok())
+            .collect();
+        let values: Vec<_> = labels
+            .iter()
+            .map(|label| label.stringValue().to_string())
+            .collect();
+        assert_eq!(values, expected);
+        let frame = cell.bounds();
+        assert!(labels[0].frame().origin.y > labels[1].frame().origin.y);
+        for label in &labels {
+            let frame_of_label = label.frame();
+            assert!(frame_of_label.origin.x >= 0.0 && frame_of_label.size.width > 0.0);
+            assert!(frame_of_label.origin.x + frame_of_label.size.width <= frame.size.width + 1.0);
+        }
+        if let Some(accessory) = labels.get(2) {
+            let title = labels[0].frame();
+            assert!(accessory.frame().origin.x > title.origin.x + title.size.width);
+        }
     }
 
     fn select(table: &NSTableView, index: usize) {
@@ -325,37 +378,68 @@ mod macos {
 
     fn button(root: &NSView, title: &str) -> Retained<NSButton> {
         until(&format!("enabled button: {title}"), || {
-            find(root, &|v| {
-                !v.isHiddenOrHasHiddenAncestor()
-                    && v.downcast_ref::<NSButton>().is_some_and(|b| {
-                        b.isEnabled()
-                            && (b.title().to_string() == title
-                                || b.accessibilityLabel()
-                                    .is_some_and(|label| label.to_string() == title))
-                    })
-            })?
-            .downcast()
-            .ok()
+            find_button(root, title)
         })
     }
 
-    fn toolbar_item(window: &NSWindow, id: &str, label: &str) -> Retained<NSToolbarItem> {
-        until(&format!("window toolbar item: {label}"), || {
-            let toolbar = window.toolbar()?;
-            assert_eq!(toolbar.identifier().to_string(), "exodys.connection");
-            toolbar.visibleItems()?.iter().find(|item| {
-                item.itemIdentifier().to_string() == id
-                    && item.label().to_string() == label
-                    && item.isEnabled()
-            })
-        })
+    fn find_button(root: &NSView, title: &str) -> Option<Retained<NSButton>> {
+        find(root, &|v| {
+            !v.isHiddenOrHasHiddenAncestor()
+                && v.downcast_ref::<NSButton>().is_some_and(|b| {
+                    b.isEnabled()
+                        && (b.title().to_string() == title
+                            || b.accessibilityLabel()
+                                .is_some_and(|label| label.to_string() == title))
+                })
+        })?
+        .downcast()
+        .ok()
     }
 
-    fn activate(app: &NSApplication, item: &NSToolbarItem) {
-        let target = item.target().unwrap();
-        assert!(unsafe {
-            app.sendAction_to_from(item.action().unwrap(), Some(&target), Some(item))
+    fn assert_integrated_chrome(window: &NSWindow, root: &NSView) {
+        assert!(window.toolbar().is_none());
+        assert_eq!(window.titleVisibility(), NSWindowTitleVisibility::Hidden);
+        assert!(window.titlebarAppearsTransparent());
+        assert!(
+            window
+                .styleMask()
+                .contains(NSWindowStyleMask::FullSizeContentView)
+        );
+        let sidebar = by_id(root, "profile-sidebar").unwrap();
+        let header = button(&sidebar, "导入配置");
+        let controls = [
+            NSWindowButton::CloseButton,
+            NSWindowButton::MiniaturizeButton,
+            NSWindowButton::ZoomButton,
+        ]
+        .map(|kind| window.standardWindowButton(kind).unwrap());
+        until("window buttons within the sidebar above its header", || {
+            let sidebar = sidebar.convertRect_toView(sidebar.bounds(), None);
+            let header = header.convertRect_toView(header.bounds(), None);
+            controls
+                .iter()
+                .all(|control| {
+                    let frame = control.convertRect_toView(control.bounds(), None);
+                    !control.isHiddenOrHasHiddenAncestor()
+                        && frame.origin.x >= sidebar.origin.x
+                        && frame.origin.x + frame.size.width
+                            <= sidebar.origin.x + sidebar.size.width
+                        && frame.origin.y + frame.size.height
+                            <= sidebar.origin.y + sidebar.size.height
+                        && frame.origin.y >= header.origin.y + header.size.height
+                })
+                .then_some(())
         });
+        let frame = unsafe { root.superview() }.unwrap();
+        for control in controls.iter().chain([&button(root, "重命名")]) {
+            let rect = control.convertRect_toView(control.bounds(), None);
+            let center = NSPoint::new(
+                rect.origin.x + rect.size.width / 2.0,
+                rect.origin.y + rect.size.height / 2.0,
+            );
+            let hit = frame.hitTest(center).unwrap();
+            assert!(hit.downcast_ref::<NSButton>() == Some(&**control));
+        }
     }
 
     fn listening(port: u16) -> bool {

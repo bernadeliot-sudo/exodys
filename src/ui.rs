@@ -3,9 +3,8 @@ mod settings_file;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use nsh_base::toolbar;
-use nsh_core::desktop::WindowAttributes;
-use nsh_core::element::desktop::current_window;
+use nsh_core::desktop::{TitleBarOptions, TitleBarStyle, WindowAttributes};
+use nsh_core::element::desktop::{current_window, title_bar};
 use nsh_core::file_dialog::{FileFilter, OpenDialog};
 use nsh_core::prelude::*;
 
@@ -32,7 +31,12 @@ fn macos_backdrop(material: MacOsBackdropMaterial) -> MacOsBackdrop {
 
 #[component]
 pub fn App() -> impl IntoElement {
+    let mut title = TitleBarOptions::default();
+    title.style = TitleBarStyle::Hidden;
+    title.height = Some(px(38.0));
+    title.controls_offset = Some(point(px(23.0), px(18.0)));
     let mut window = WindowAttributes::default();
+    window.title_bar = Some(title);
     window.min_size = Some(Some(size(px(740.0), px(560.0))));
     current_window().set(window);
     let ui = Ui::new();
@@ -62,7 +66,6 @@ pub fn App() -> impl IntoElement {
                 .flex_1()
                 .min_w(px(0.0))
                 .flex_col()
-                .child(connection(ui))
                 .child(feedback(ui))
                 .child(
                     view()
@@ -300,7 +303,9 @@ fn sidebar(ui: Ui) -> impl IntoElement {
         .test_id("profile-sidebar")
         .w(px(218.0))
         .m(px(9.0))
-        .p(px(10.0))
+        .px(px(10.0))
+        .pt(move || px((title_bar().top.0 - 9.0).max(10.0)))
+        .pb(px(10.0))
         .gap(px(8.0))
         .rounded(px(16.0))
         .shadow_sm()
@@ -374,6 +379,14 @@ fn sidebar(ui: Ui) -> impl IntoElement {
             }
         }))
         .child(
+            text(move || ui.state.with(connection_status))
+                .test_id("connection-status")
+                .pl(px(6.0))
+                .text_size(px(12.0))
+                .truncate(),
+        )
+        .child(connection(ui))
+        .child(
             view()
                 .flex_row()
                 .items_center()
@@ -414,32 +427,89 @@ fn sidebar_button(
     symbol: &'static str,
     press: impl Fn() + 'static,
 ) -> NativeView {
-    native_button(
-        move || label,
+    icon_action(
+        label,
+        symbol,
         move || ui.busy.get().is_some() || ui.session.with(Option::is_none),
-        Tone::Standard,
         press,
     )
-    .prop("symbol", serde_json::Value::from(symbol))
-    .size(px(30.0))
+}
+
+fn icon_action(
+    label: &'static str,
+    symbol: &'static str,
+    disabled: impl Fn() -> bool + 'static,
+    press: impl Fn() + 'static,
+) -> NativeView {
+    native_button(move || label, disabled, Tone::Standard, press)
+        .prop("symbol", serde_json::Value::from(symbol))
+        .size(px(30.0))
+}
+
+fn connection_status(state: &Snapshot) -> String {
+    let status = if state.connected {
+        "运行中"
+    } else {
+        "已断开"
+    };
+    let node = state.node().map_or("未选择节点", |node| node.name.as_str());
+    format!("{status} · {node}")
 }
 
 fn connection(ui: Ui) -> impl IntoElement {
-    // Only a lifecycle anchor occupies the content tree. AppKit lays out the toolbar.
-    native("exodys/window-toolbar")
-        .h(px(0.0))
-        .prop("state", move || {
-            ui.state.with(|state| {
-                serde_json::json!({
-                    "connected": state.connected,
-                    "node": state.node().map(|node| node.name.as_str()),
-                    "address": address(state.preferences.port).to_string(),
-                    "busy": ui.busy.get().is_some(),
-                })
-            })
-        })
-        .on_native_event(move |event: &NativeEvent| match &*event.name {
-            "copy" => {
+    view()
+        .test_id("connection-actions")
+        .flex_row()
+        .items_center()
+        .gap(px(6.0))
+        .child(
+            native_button(
+                move || {
+                    if ui.state.with(|s| s.connected) {
+                        "断开"
+                    } else {
+                        "连接"
+                    }
+                },
+                move || {
+                    ui.busy.get().is_some() || ui.state.with(|s| !s.connected && s.node().is_none())
+                },
+                Tone::Primary,
+                move || {
+                    if ui.state.with_untracked(|s| s.connected) {
+                        ui.work("断开连接…", Job::Disconnect, false);
+                    } else if ui.state.with_untracked(|s| s.node().is_some()) {
+                        ui.work("启动本地代理…", Job::Connect, false);
+                    }
+                },
+            )
+            .h(px(30.0))
+            .flex_1(),
+        )
+        .child(when(
+            move || ui.state.with(|s| s.connected),
+            move || {
+                icon_action(
+                    "测试代理",
+                    "waveform.path.ecg",
+                    move || ui.busy.get().is_some(),
+                    move || {
+                        if ui.state.with_untracked(|s| s.connected) {
+                            ui.work(
+                                "通过代理发送测试请求…",
+                                Job::Probe("https://cp.cloudflare.com/generate_204".into()),
+                                false,
+                            );
+                        }
+                    },
+                )
+            },
+        ))
+        .child(icon_action(
+            "复制地址",
+            "doc.on.doc",
+            || false,
+            move || {
                 set_clipboard(
                     ui.state
                         .with_untracked(|s| address(s.preferences.port).to_string()),
@@ -448,25 +518,12 @@ fn connection(ui: Ui) -> impl IntoElement {
                     message: "已复制本地代理地址。".into(),
                     error: false,
                 }));
-            }
-            "probe" if ui.state.with_untracked(|s| s.connected) => ui.work(
-                "通过代理发送测试请求…",
-                Job::Probe("https://cp.cloudflare.com/generate_204".into()),
-                false,
-            ),
-            "toggle" => {
-                if ui.state.with_untracked(|s| s.connected) {
-                    ui.work("断开连接…", Job::Disconnect, false);
-                } else if ui.state.with_untracked(|s| s.node().is_some()) {
-                    ui.work("启动本地代理…", Job::Connect, false);
-                }
-            }
-            _ => {}
-        })
+            },
+        ))
 }
 
-fn native_button(
-    label: impl Fn() -> &'static str + 'static,
+fn native_button<T: Into<String>>(
+    label: impl Fn() -> T + 'static,
     disabled: impl Fn() -> bool + 'static,
     tone: Tone,
     execute: impl Fn() + 'static,
@@ -627,8 +684,7 @@ fn node_browser(ui: Ui, profile: Memo<Option<Arc<Profile>>>) -> impl IntoElement
         .flex_col()
         .gap(px(11.0))
         .child(
-            toolbar()
-                .accessibility_label("配置工具栏")
+            view()
                 .flex_row()
                 .items_center()
                 .gap(px(8.0))
@@ -664,9 +720,9 @@ fn node_browser(ui: Ui, profile: Memo<Option<Arc<Profile>>>) -> impl IntoElement
                 .child(when(
                     move || profile.with(|p| p.as_ref().is_some_and(|p| p.subscription.is_some())),
                     move || {
-                        action(
+                        icon_action(
                             "刷新订阅",
-                            Tone::Standard,
+                            "arrow.clockwise",
                             move || ui.busy.get().is_some() || active.get(),
                             move || {
                                 if let Some(id) = profile_id.get_untracked() {
@@ -676,9 +732,9 @@ fn node_browser(ui: Ui, profile: Memo<Option<Arc<Profile>>>) -> impl IntoElement
                         )
                     },
                 ))
-                .child(action(
+                .child(icon_action(
                     "重命名",
-                    Tone::Standard,
+                    "pencil",
                     move || ui.busy.get().is_some(),
                     move || {
                         if let Some(p) = profile.get_untracked() {
@@ -686,9 +742,9 @@ fn node_browser(ui: Ui, profile: Memo<Option<Arc<Profile>>>) -> impl IntoElement
                         }
                     },
                 ))
-                .child(action(
+                .child(icon_action(
                     "删除",
-                    Tone::Standard,
+                    "trash",
                     move || ui.busy.get().is_some() || active.get(),
                     move || {
                         if let Some(id) = profile_id.get_untracked() {
