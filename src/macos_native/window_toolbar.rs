@@ -9,7 +9,7 @@ use nsh_platform_macos::{
         rc::Retained, runtime::ProtocolObject, sel,
     },
     objc2_app_kit::{
-        NSImage, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
+        NSImage, NSTitlebarSeparatorStyle, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
         NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem, NSView, NSWindow,
         NSWindowToolbarStyle,
     },
@@ -48,14 +48,24 @@ impl State {
         };
         let label = NSString::from_str(label);
         item.setLabel(&label);
-        item.setToolTip(Some(&label));
-        item.setImage(
-            NSImage::imageWithSystemSymbolName_accessibilityDescription(
-                &NSString::from_str(symbol),
-                Some(&label),
-            )
-            .as_deref(),
-        );
+        let tooltip = if item.itemIdentifier().to_string() == "copy" {
+            NSString::from_str(&format!("复制 HTTP / SOCKS5 地址：{}", self.address))
+        } else {
+            label.clone()
+        };
+        item.setToolTip(Some(&tooltip));
+        if item.itemIdentifier().to_string() == "toggle" {
+            item.setTitle(&label);
+            item.setBordered(true);
+        } else {
+            item.setImage(
+                NSImage::imageWithSystemSymbolName_accessibilityDescription(
+                    &NSString::from_str(symbol),
+                    Some(&label),
+                )
+                .as_deref(),
+            );
+        }
         item.setEnabled(enabled);
     }
 }
@@ -76,6 +86,7 @@ struct PreviousChrome {
     toolbar: Option<Retained<NSToolbar>>,
     subtitle: Retained<NSString>,
     style: NSWindowToolbarStyle,
+    separator: NSTitlebarSeparatorStyle,
 }
 struct Ivars {
     toolbar: Retained<NSToolbar>,
@@ -122,8 +133,9 @@ define_class!(
             unsafe { let _: () = msg_send![super(self), viewDidMoveToWindow]; }
             if let Some(window) = self.window() {
                 let iv = self.ivars();
-                iv.previous.replace(Some(PreviousChrome { toolbar: window.toolbar(), subtitle: window.subtitle(), style: window.toolbarStyle() }));
+                iv.previous.replace(Some(PreviousChrome { toolbar: window.toolbar(), subtitle: window.subtitle(), style: window.toolbarStyle(), separator: window.titlebarSeparatorStyle() }));
                 window.setToolbarStyle(NSWindowToolbarStyle::Unified);
+                window.setTitlebarSeparatorStyle(NSTitlebarSeparatorStyle::None);
                 window.setToolbar(Some(&iv.toolbar));
                 self.refresh(&window);
             }
@@ -140,6 +152,7 @@ impl Anchor {
         {
             window.setToolbar(previous.toolbar.as_deref());
             window.setToolbarStyle(previous.style);
+            window.setTitlebarSeparatorStyle(previous.separator);
             window.setSubtitle(&previous.subtitle);
         }
     }
@@ -159,9 +172,8 @@ impl Anchor {
             "已断开"
         };
         window.setSubtitle(&NSString::from_str(&format!(
-            "{status} · {}    HTTP / SOCKS5 · {}",
-            state.node.as_deref().unwrap_or("未选择节点"),
-            state.address
+            "{status} · {}",
+            state.node.as_deref().unwrap_or("未选择节点")
         )));
     }
 }

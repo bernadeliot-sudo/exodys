@@ -210,13 +210,13 @@ mod macos {
                 .any(|item| item.itemIdentifier().to_string() == "probe")
         );
         assert!(window.subtitle().to_string().contains("Tokyo relay"));
+        let copy = toolbar_item(&window, "copy", "复制地址");
         assert!(
-            window
-                .subtitle()
+            copy.toolTip()
+                .unwrap()
                 .to_string()
                 .contains(&address(port).to_string())
         );
-        toolbar_item(&window, "copy", "复制地址");
         activate(&app, &toolbar_item(&window, "toggle", "连接"));
         until("sing-box SOCKS listener", || listening(port).then_some(()));
         toolbar_item(&window, "toggle", "断开");
@@ -298,8 +298,12 @@ mod macos {
         until(&format!("enabled button: {title}"), || {
             find(root, &|v| {
                 !v.isHiddenOrHasHiddenAncestor()
-                    && v.downcast_ref::<NSButton>()
-                        .is_some_and(|b| b.isEnabled() && b.title().to_string() == title)
+                    && v.downcast_ref::<NSButton>().is_some_and(|b| {
+                        b.isEnabled()
+                            && (b.title().to_string() == title
+                                || b.accessibilityLabel()
+                                    .is_some_and(|label| label.to_string() == title))
+                    })
             })?
             .downcast()
             .ok()

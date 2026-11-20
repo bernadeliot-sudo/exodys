@@ -142,11 +142,44 @@ impl NativeComponent for Button {
         match name {
             "title" => {
                 let title = value.and_then(Value::as_str).unwrap_or_default();
-                self.button.setTitle(&NSString::from_str(title));
+                let title = NSString::from_str(title);
+                self.button.setAccessibilityLabel(Some(&title));
+                if self.button.image().is_some() {
+                    self.button.setToolTip(Some(&title));
+                } else {
+                    self.button.setTitle(&title);
+                }
                 let size = self.button.intrinsicContentSize();
                 self.target
                     .ivars()
                     .set_size(size.width as f32, size.height as f32);
+            }
+            "symbol" => {
+                use nsh_platform_macos::objc2_app_kit::{NSCellImagePosition, NSImage};
+                let image = value.and_then(Value::as_str).and_then(|name| {
+                    NSImage::imageWithSystemSymbolName_accessibilityDescription(
+                        &NSString::from_str(name),
+                        None,
+                    )
+                });
+                let label = self
+                    .button
+                    .accessibilityLabel()
+                    .unwrap_or_else(|| self.button.title());
+                let visible_title = if image.is_some() {
+                    NSString::new()
+                } else {
+                    label.clone()
+                };
+                self.button.setTitle(&visible_title);
+                self.button.setImage(image.as_deref());
+                self.button.setImagePosition(if image.is_some() {
+                    NSCellImagePosition::ImageOnly
+                } else {
+                    NSCellImagePosition::NoImage
+                });
+                self.button.setBordered(image.is_none());
+                self.button.setToolTip(image.as_ref().map(|_| &*label));
             }
             "disabled" => {
                 self.button

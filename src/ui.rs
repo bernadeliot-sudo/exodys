@@ -12,9 +12,8 @@ use crate::engine::address;
 use crate::import::{MAX_BYTES, Source};
 use crate::session::{Job, Session, Snapshot};
 
-// macOS semantic colors: quiet surfaces, system blue for actions, and a
-// source-list selection tint instead of the previous dashboard palette.
-const PAPER: AdaptiveColor = AdaptiveColor::rgb(0xf5f5f7, 0x1c1c1e);
+// Flat document canvas; the inset source list supplies the one raised surface.
+const CANVAS: AdaptiveColor = AdaptiveColor::rgb(0xffffff, 0x1e1e20);
 const SURFACE: AdaptiveColor = AdaptiveColor::rgb(0xffffff, 0x2c2c2e);
 const INK: AdaptiveColor = AdaptiveColor::rgb(0x1d1d1f, 0xf5f5f7);
 const SUBTLE: AdaptiveColor = AdaptiveColor::rgb(0x6e6e73, 0x98989d);
@@ -53,8 +52,7 @@ pub fn App() -> impl IntoElement {
     view()
         .flex_1()
         .flex_row()
-        .bg(PAPER)
-        .macos_backdrop(macos_backdrop(MacOsBackdropMaterial::WindowBackground))
+        .bg(CANVAS)
         .text_color(INK)
         .child(sidebar(ui))
         .child(
@@ -62,14 +60,15 @@ pub fn App() -> impl IntoElement {
                 .flex_1()
                 .min_w(px(0.0))
                 .flex_col()
-                .bg(PAPER)
                 .child(connection(ui))
                 .child(feedback(ui))
                 .child(
                     view()
                         .flex_1()
                         .min_h(px(0.0))
-                        .p(px(22.0))
+                        .px(px(22.0))
+                        .pt(px(14.0))
+                        .pb(px(10.0))
                         .child(dynamic(move || match ui.page.get() {
                             Page::Nodes => nodes(ui).into_element(),
                             Page::Import => import_form(ui).into_element(),
@@ -281,48 +280,40 @@ impl Ui {
 fn sidebar(ui: Ui) -> impl IntoElement {
     let profiles = computed(move || ui.state.with(|state| state.catalog.clone()));
     view()
-        .w(px(220.0))
-        .flex_col()
-        .p(px(12.0))
-        .gap(px(10.0))
-        .border_r_1()
-        .border_color(LINE)
+        .test_id("profile-sidebar")
+        .w(px(218.0))
+        .m(px(9.0))
+        .p(px(10.0))
+        .gap(px(8.0))
+        .rounded(px(16.0))
+        .shadow_sm()
         .macos_backdrop(macos_backdrop(MacOsBackdropMaterial::Sidebar))
-        .child(
-            view().h(px(34.0)).px(px(8.0)).items_center().child(
-                text("Exodys")
-                    .text_size(px(14.0))
-                    .font_weight(FontWeight::SEMIBOLD),
-            ),
-        )
-        .child(action(
-            "导入配置",
-            Tone::Primary,
-            move || ui.busy.get().is_some() || ui.session.with(Option::is_none),
-            move || ui.form(Page::Import, ""),
-        ))
         .child(
             view()
                 .flex_row()
-                .justify_between()
                 .items_center()
-                .h(px(24.0))
-                .px(px(8.0))
+                .h(px(34.0))
+                .pl(px(6.0))
+                .gap(px(6.0))
                 .child(
                     text("配置")
-                        .text_size(px(11.0))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(SUBTLE),
+                        .text_size(px(16.0))
+                        .font_weight(FontWeight::SEMIBOLD),
                 )
                 .child(
                     text(move || profiles.with(|c| c.profiles.len().to_string()))
-                        .text_size(px(11.0))
+                        .text_size(px(12.0))
                         .text_color(SUBTLE),
-                ),
+                )
+                .child(view().flex_1())
+                .child(sidebar_button(ui, "导入配置", "plus", move || {
+                    ui.form(Page::Import, "")
+                })),
         )
         .child(dynamic(move || {
             if profiles.with(|catalog| catalog.profiles.is_empty()) {
                 text("暂无配置")
+                    .flex_1()
                     .text_color(SUBTLE)
                     .text_size(px(13.0))
                     .p(px(9.0))
@@ -365,18 +356,55 @@ fn sidebar(ui: Ui) -> impl IntoElement {
                     .into_element()
             }
         }))
-        .child(action(
-            "本地端口设置",
-            Tone::Standard,
-            move || ui.busy.get().is_some() || ui.session.with(Option::is_none),
-            move || {
-                ui.form(
-                    Page::Settings,
-                    ui.state
-                        .with_untracked(|state| state.preferences.port.to_string()),
-                );
-            },
-        ))
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .pl(px(6.0))
+                .gap(px(6.0))
+                .child(
+                    view()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .gap(px(3.0))
+                        .child(text("本地代理").text_color(SUBTLE).text_size(px(11.0)))
+                        .child(
+                            text(move || {
+                                ui.state.with(|s| address(s.preferences.port).to_string())
+                            })
+                            .text_size(px(13.0))
+                            .truncate(),
+                        ),
+                )
+                .child(sidebar_button(
+                    ui,
+                    "本地端口设置",
+                    "gearshape",
+                    move || {
+                        ui.form(
+                            Page::Settings,
+                            ui.state
+                                .with_untracked(|state| state.preferences.port.to_string()),
+                        )
+                    },
+                )),
+        )
+}
+
+fn sidebar_button(
+    ui: Ui,
+    label: &'static str,
+    symbol: &'static str,
+    press: impl Fn() + 'static,
+) -> NativeView {
+    native_button(
+        move || label,
+        move || ui.busy.get().is_some() || ui.session.with(Option::is_none),
+        Tone::Standard,
+        press,
+    )
+    .prop("symbol", serde_json::Value::from(symbol))
+    .size(px(30.0))
 }
 
 fn connection(ui: Ui) -> impl IntoElement {
@@ -517,10 +545,6 @@ fn empty_library(ui: Ui) -> impl IntoElement {
         .justify_center()
         .gap(px(12.0))
         .p(px(18.0))
-        .rounded(px(10.0))
-        .border_1()
-        .border_color(LINE)
-        .bg(SURFACE)
         .child(
             text(move || {
                 if ui.session.with(Option::is_none) {
