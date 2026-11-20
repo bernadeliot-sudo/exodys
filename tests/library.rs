@@ -126,7 +126,10 @@ fn settings_transfer_preserves_selection_and_recovers_from_invalid_files() {
         !session.snapshot().preferences.system_proxy,
         "old settings must not opt in"
     );
-    session.run(Job::SetSystemProxy(true)).unwrap();
+    assert_eq!(
+        session.run(Job::SetSystemProxy(true)).is_ok(),
+        cfg!(target_os = "macos"),
+    );
     session
         .run(Job::Import(Source::Text(CLASH.into())))
         .unwrap();

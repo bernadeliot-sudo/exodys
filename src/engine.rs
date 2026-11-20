@@ -8,6 +8,9 @@ use serde_json::{Value, json};
 
 use crate::{Result, catalog::Node};
 
+#[cfg(target_os = "windows")]
+mod windows_job;
+
 const CHECK_WAIT: Duration = Duration::from_secs(4);
 const START_WAIT: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(25);
@@ -23,16 +26,25 @@ pub fn engine_path() -> Result<PathBuf> {
             .then_some(path)
             .ok_or_else(|| "EXODYS_SING_BOX 必须指向 sing-box 可执行文件。".into());
     }
+    #[cfg(target_os = "windows")]
+    let (executable, extra, missing) = (
+        "sing-box.exe",
+        &[] as &[&str],
+        "找不到 sing-box.exe。请将它的目录加入 PATH，或用 EXODYS_SING_BOX 指定绝对路径。",
+    );
+    #[cfg(not(target_os = "windows"))]
+    let (executable, extra, missing) = (
+        "sing-box",
+        &["/opt/homebrew/bin", "/usr/local/bin"] as &[&str],
+        "找不到 sing-box。请运行 brew install sing-box，然后重试。",
+    );
     let paths = std::env::var_os("PATH").unwrap_or_default();
     std::env::split_paths(&paths)
         .filter(|directory| directory.is_absolute())
-        .chain([
-            PathBuf::from("/opt/homebrew/bin"),
-            PathBuf::from("/usr/local/bin"),
-        ])
-        .map(|dir| dir.join("sing-box"))
+        .chain(extra.iter().map(PathBuf::from))
+        .map(|dir| dir.join(executable))
         .find(|path| path.is_file())
-        .ok_or_else(|| "找不到 sing-box。请运行 brew install sing-box，然后重试。".into())
+        .ok_or_else(|| missing.into())
 }
 
 pub(crate) struct Prepared {
@@ -73,7 +85,7 @@ pub(crate) fn prepare(
     )?;
     let deadline = Instant::now() + CHECK_WAIT;
     loop {
-        match check.0.try_wait() {
+        match check.child.try_wait() {
             Ok(Some(status)) if status.success() => break,
             Ok(Some(_)) | Err(_) => {
                 return Err("sing-box 无法使用此节点。请检查协议、认证和传输选项。".into());
@@ -133,24 +145,41 @@ fn socks_ready(socket: SocketAddr) -> bool {
         && reply == [5, 0]
 }
 
-struct ChildGuard(Child);
+struct ChildGuard {
+    child: Child,
+    #[cfg(target_os = "windows")]
+    _job: std::os::windows::io::OwnedHandle,
+}
 
 impl ChildGuard {
     fn spawn(command: &mut Command) -> Result<Self> {
-        command
+        #[cfg(target_os = "windows")]
+        let job = windows_job::prepare(command)?;
+        let child = command
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .map(Self)
-            .map_err(|_| "无法运行 sing-box。请检查引擎文件的权限。".to_owned())
+            .map_err(|_| "无法运行 sing-box。请检查引擎文件的权限。".to_owned())?;
+        let guard = Self {
+            child,
+            #[cfg(target_os = "windows")]
+            _job: job,
+        };
+        #[cfg(target_os = "windows")]
+        let guard = {
+            let mut guard = guard;
+            windows_job::assign(&guard._job, &mut guard.child)?;
+            guard
+        };
+        Ok(guard)
     }
 }
 
 impl Drop for ChildGuard {
     fn drop(&mut self) {
-        if !matches!(self.0.try_wait(), Ok(Some(_))) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
+        if !matches!(self.child.try_wait(), Ok(Some(_))) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
         }
     }
 }
@@ -162,7 +191,7 @@ pub(crate) struct Proxy {
 
 impl Proxy {
     pub(crate) fn alive(&mut self) -> bool {
-        matches!(self.child.0.try_wait(), Ok(None))
+        matches!(self.child.child.try_wait(), Ok(None))
     }
 
     pub(crate) fn probe(&self, url: &str) -> Result<Duration> {

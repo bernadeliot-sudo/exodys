@@ -1,6 +1,6 @@
 # Exodys
 
-Exodys 是独立开发的 macOS 代理客户端。它使用 Rust 和 [Native Shell](https://nsh.dev/) 0.6.1 渲染原生 AppKit 界面，以本机安装的 [sing-box](https://sing-box.sagernet.org/) 驱动 HTTP 和 SOCKS5 代理。
+Exodys 是独立开发的桌面代理客户端。它使用 Rust 和 [Native Shell](https://nsh.dev/) 0.6.1 构建 macOS 和 Windows 界面，以本机安装的 [sing-box](https://sing-box.sagernet.org/) 驱动 HTTP 和 SOCKS5 代理。
 
 [macOS 功能对齐清单](docs/karing-parity.md)区分已验证流程、支持范围和待补功能。
 
@@ -18,9 +18,11 @@ Exodys 是独立开发的 macOS 代理客户端。它使用 Rust 和 [Native She
 
 在侧栏齿轮打开 **分流规则**，每行填写一条规则，按顺序匹配。支持 `DOMAIN`、`DOMAIN-SUFFIX`、`DOMAIN-KEYWORD`、`IP-CIDR`、`IP-CIDR6` 和末尾的 `MATCH`。动作可选 `DIRECT`（直连）、`PROXY`（当前节点）或 `REJECT`（拒绝）。例如 `DOMAIN-SUFFIX,example.org,DIRECT` 使该域名及其子域名直连。未匹配的请求走当前节点。断开时可修改规则，下次连接生效。**导出设置** 与 **恢复设置** 通过本地 JSON 文件转移端口和分流规则。
 
-配置文件存储在 `~/Library/Application Support/Exodys`。订阅地址和节点认证随配置保存在权限为 `0600` 的本地文件中，可能包含敏感信息。开发与测试可将 `EXODYS_DATA_DIR` 指向一个单独的绝对路径。
+macOS 配置存储在 `~/Library/Application Support/Exodys`，Windows 配置存储在 `%LOCALAPPDATA%\Exodys`。订阅地址和节点认证随配置保存在本地。macOS 的配置文件使用 `0600` 权限，Windows 文件继承所在目录的访问控制。开发与测试可将 `EXODYS_DATA_DIR` 指向一个单独的绝对路径。
 
 ## 构建
+
+### macOS
 
 在 macOS 上使用 Cargo、项目固定的 Rust 1.100.0 和 Xcode Command Line Tools。安装 sing-box 后即可实际连接。Exodys 会查找 `PATH`、`/opt/homebrew/bin` 和 `/usr/local/bin` 中的 `sing-box`，也可通过 `EXODYS_SING_BOX` 指定绝对路径。
 
@@ -37,6 +39,16 @@ cargo run --locked --release
 ```bash
 sh scripts/package-macos.sh
 ```
+
+### Windows（x64）
+
+在 Windows 上安装 Rust 和 Visual Studio C++ 生成工具（含 Windows SDK）。将 `sing-box.exe` 所在目录加入用户 `PATH`，或设置 `EXODYS_SING_BOX` 为可执行文件的绝对路径。
+
+```powershell
+cargo build --locked --release --bin exodys
+```
+
+启动 `target\release\exodys.exe`。Windows 首版使用系统标题栏，提供配置导入与订阅刷新、节点搜索与选择、本地 HTTP/SOCKS5 代理、连接检测和分流。需要代理的应用可使用侧栏显示的地址和端口。系统代理目前由 macOS 提供。
 
 ## 测试
 

@@ -1,10 +1,16 @@
 mod settings_file;
+#[cfg(target_os = "windows")]
+mod windows;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use nsh_core::desktop::{TitleBarOptions, TitleBarStyle, WindowAttributes};
-use nsh_core::element::desktop::{current_window, title_bar};
+use nsh_core::desktop::WindowAttributes;
+#[cfg(target_os = "macos")]
+use nsh_core::desktop::{TitleBarOptions, TitleBarStyle};
+use nsh_core::element::desktop::current_window;
+#[cfg(target_os = "macos")]
+use nsh_core::element::desktop::title_bar;
 use nsh_core::file_dialog::{FileFilter, OpenDialog};
 use nsh_core::prelude::*;
 
@@ -21,6 +27,7 @@ const SUBTLE: AdaptiveColor = AdaptiveColor::rgb(0x6e6e73, 0x98989d);
 const LINE: AdaptiveColor = AdaptiveColor::rgb(0xd6d6dc, 0x48484a);
 const ERROR: AdaptiveColor = AdaptiveColor::rgb(0xff3b30, 0xff6961);
 
+#[cfg(target_os = "macos")]
 fn macos_backdrop(material: MacOsBackdropMaterial) -> MacOsBackdrop {
     let mut backdrop = MacOsBackdrop::default();
     backdrop.material = material;
@@ -31,12 +38,15 @@ fn macos_backdrop(material: MacOsBackdropMaterial) -> MacOsBackdrop {
 
 #[component]
 pub fn App() -> impl IntoElement {
-    let mut title = TitleBarOptions::default();
-    title.style = TitleBarStyle::Hidden;
-    title.height = Some(px(38.0));
-    title.controls_offset = Some(point(px(23.0), px(18.0)));
     let mut window = WindowAttributes::default();
-    window.title_bar = Some(title);
+    #[cfg(target_os = "macos")]
+    {
+        let mut title = TitleBarOptions::default();
+        title.style = TitleBarStyle::Hidden;
+        title.height = Some(px(38.0));
+        title.controls_offset = Some(point(px(23.0), px(18.0)));
+        window.title_bar = Some(title);
+    }
     window.min_size = Some(Some(size(px(740.0), px(560.0))));
     current_window().set(window);
     let ui = Ui::new();
@@ -299,17 +309,22 @@ impl Ui {
 
 fn sidebar(ui: Ui) -> impl IntoElement {
     let profiles = computed(move || ui.state.with(|state| state.catalog.clone()));
-    view()
+    let panel = view()
         .test_id("profile-sidebar")
         .w(px(218.0))
         .m(px(9.0))
         .px(px(10.0))
-        .pt(move || px((title_bar().top.0 - 9.0).max(10.0)))
         .pb(px(10.0))
         .gap(px(8.0))
         .rounded(px(16.0))
-        .shadow_sm()
-        .macos_backdrop(macos_backdrop(MacOsBackdropMaterial::Sidebar))
+        .shadow_sm();
+    #[cfg(target_os = "macos")]
+    let panel = panel
+        .pt(move || px((title_bar().top.0 - 9.0).max(10.0)))
+        .macos_backdrop(macos_backdrop(MacOsBackdropMaterial::Sidebar));
+    #[cfg(target_os = "windows")]
+    let panel = panel.pt(px(10.0)).bg(windows::SIDEBAR);
+    panel
         .child(
             view()
                 .flex_row()
@@ -341,7 +356,8 @@ fn sidebar(ui: Ui) -> impl IntoElement {
                     .p(px(9.0))
                     .into_element()
             } else {
-                native("exodys/profile-table")
+                #[cfg(target_os = "macos")]
+                let list = native("exodys/profile-table")
                     .test_id("profile-table")
                     .flex_1()
                     .min_h(px(0.0))
@@ -375,7 +391,10 @@ fn sidebar(ui: Ui) -> impl IntoElement {
                             ui.navigate(Some(id));
                         }
                     })
-                    .into_element()
+                    .into_element();
+                #[cfg(target_os = "windows")]
+                let list = windows::profile_list(ui, profiles).into_element();
+                list
             }
         }))
         .child(
@@ -426,7 +445,7 @@ fn sidebar_button(
     label: &'static str,
     symbol: &'static str,
     press: impl Fn() + 'static,
-) -> NativeView {
+) -> impl IntoElement {
     icon_action(
         label,
         symbol,
@@ -440,10 +459,14 @@ fn icon_action(
     symbol: &'static str,
     disabled: impl Fn() -> bool + 'static,
     press: impl Fn() + 'static,
-) -> NativeView {
-    native_button(move || label, disabled, Tone::Standard, press)
+) -> impl IntoElement {
+    #[cfg(target_os = "macos")]
+    let control = native_button(move || label, disabled, Tone::Standard, press)
         .prop("symbol", serde_json::Value::from(symbol))
-        .size(px(30.0))
+        .size(px(30.0));
+    #[cfg(target_os = "windows")]
+    let control = windows::icon_button(label, symbol, disabled, press);
+    control
 }
 
 fn connection_status(state: &Snapshot) -> String {
@@ -522,6 +545,10 @@ fn connection(ui: Ui) -> impl IntoElement {
         ))
 }
 
+#[cfg(target_os = "windows")]
+use windows::button as native_button;
+
+#[cfg(target_os = "macos")]
 fn native_button<T: Into<String>>(
     label: impl Fn() -> T + 'static,
     disabled: impl Fn() -> bool + 'static,
@@ -678,6 +705,7 @@ fn node_browser(ui: Ui, profile: Memo<Option<Arc<Profile>>>) -> impl IntoElement
         })
     });
     let selected = computed(move || ui.state.with(|state| state.preferences.selected.clone()));
+    let selection_disabled = move || ui.busy.get().is_some();
     view()
         .flex_1()
         .min_h(px(0.0))
@@ -753,25 +781,10 @@ fn node_browser(ui: Ui, profile: Memo<Option<Arc<Profile>>>) -> impl IntoElement
                     },
                 )),
         )
-        .child(
-            native("exodys/search-field")
-                .test_id("node-search")
-                .h(px(32.0))
-                .min_w(px(180.0))
-                .prop("value", move || ui.filter.get())
-                .prop("placeholder", || {
-                    serde_json::Value::String("搜索节点名称、协议或地址".into())
-                })
-                .on_native_event(move |event: &NativeEvent| {
-                    if &*event.name == "change"
-                        && let Some(value) = event.data.as_str()
-                    {
-                        ui.filter.set(value.to_owned());
-                    }
-                }),
-        )
-        .child(
-            native("exodys/node-table")
+        .child(search_field(ui).h(px(32.0)).min_w(px(180.0)))
+        .child({
+            #[cfg(target_os = "macos")]
+            let list = native("exodys/node-table")
                 .test_id("node-table")
                 .flex_1()
                 .min_h(px(0.0))
@@ -809,7 +822,7 @@ fn node_browser(ui: Ui, profile: Memo<Option<Arc<Profile>>>) -> impl IntoElement
                     })
                 })
                 .prop("disabled", move || {
-                    serde_json::Value::Bool(ui.busy.get().is_some())
+                    serde_json::Value::Bool(selection_disabled())
                 })
                 .on_native_event(move |event: &NativeEvent| {
                     if &*event.name == "select"
@@ -825,8 +838,11 @@ fn node_browser(ui: Ui, profile: Memo<Option<Arc<Profile>>>) -> impl IntoElement
                             false,
                         );
                     }
-                }),
-        )
+                });
+            #[cfg(target_os = "windows")]
+            let list = windows::node_list(ui, profile, matches, selected, selection_disabled);
+            list
+        })
         .child(when(
             move || matches.with(Matches::is_empty),
             || {
@@ -836,6 +852,26 @@ fn node_browser(ui: Ui, profile: Memo<Option<Arc<Profile>>>) -> impl IntoElement
             },
         ))
 }
+
+#[cfg(target_os = "macos")]
+fn search_field(ui: Ui) -> NativeView {
+    native("exodys/search-field")
+        .test_id("node-search")
+        .prop("value", move || ui.filter.get())
+        .prop("placeholder", || {
+            serde_json::Value::String("搜索节点名称、协议或地址".into())
+        })
+        .on_native_event(move |event: &NativeEvent| {
+            if &*event.name == "change"
+                && let Some(value) = event.data.as_str()
+            {
+                ui.filter.set(value.to_owned());
+            }
+        })
+}
+
+#[cfg(target_os = "windows")]
+use windows::search_field;
 
 fn import_form(ui: Ui) -> impl IntoElement {
     form_panel("导入配置")
@@ -851,10 +887,13 @@ fn import_form(ui: Ui) -> impl IntoElement {
                 "订阅地址或节点内容",
                 "import-content",
                 || {},
+                EditorOptions {
+                    auto_focus: true,
+                    max_length: Some(MAX_BYTES as u32 + 1),
+                    ..EditorOptions::default()
+                },
             )
-            .h(px(121.0))
-            .prop("auto_focus", serde_json::Value::Bool(true))
-            .prop("max_length", serde_json::Value::from(MAX_BYTES + 1)),
+            .h(px(121.0)),
         )
         .child(
             view()
@@ -894,10 +933,13 @@ fn rename_form(ui: Ui, id: u64) -> impl IntoElement {
                 "配置名称",
                 "profile-name",
                 save,
+                EditorOptions {
+                    auto_focus: true,
+                    max_length: Some(120),
+                    ..EditorOptions::default()
+                },
             )
-            .h(px(28.0))
-            .prop("auto_focus", serde_json::Value::Bool(true))
-            .prop("max_length", serde_json::Value::from(120)),
+            .h(px(28.0)),
         )
         .child(
             view()
@@ -966,13 +1008,20 @@ fn settings_form(ui: Ui) -> impl IntoElement {
                 .font_weight(FontWeight::MEDIUM),
         )
         .child(
-            editor("exodys/text-field", ui.draft, "2080", "local-port", save)
-                .h(px(28.0))
-                .w(px(130.0))
-                .prop("max_length", serde_json::Value::from(5))
-                .prop("readonly", move || {
-                    serde_json::Value::Bool(ui.state.with(|s| s.connected))
-                }),
+            editor(
+                "exodys/text-field",
+                ui.draft,
+                "2080",
+                "local-port",
+                save,
+                EditorOptions {
+                    max_length: Some(5),
+                    readonly: Some(computed(move || ui.state.with(|s| s.connected))),
+                    ..EditorOptions::default()
+                },
+            )
+            .h(px(28.0))
+            .w(px(130.0)),
         )
         .child(when(
             move || ui.state.with(|s| s.connected),
@@ -990,14 +1039,13 @@ fn settings_form(ui: Ui) -> impl IntoElement {
                 );
             },
         ))
-        .child(text("macOS 系统代理只影响遵循系统 HTTP/HTTPS 代理的应用。连接时可能需要授权，断开时恢复原设置。").text_size(px(13.0)).text_color(SUBTLE))
-        .child(view().flex_row().gap(px(8.0))
-            .child(native_button(
-                move || if ui.state.with(|s| s.preferences.system_proxy) { "关闭系统代理模式" } else { "启用系统代理模式" },
-                move || ui.busy.get().is_some() || ui.state.with(|s| s.connected), Tone::Standard,
-                move || ui.work("保存系统代理选项…", Job::SetSystemProxy(!ui.state.with_untracked(|s| s.preferences.system_proxy)), false),
-            ))
-            .child(action("恢复系统代理", Tone::Standard, move || ui.busy.get().is_some() || ui.state.with(|s| s.connected), move || ui.work("检查系统代理…", Job::RecoverSystemProxy, false))))
+        .children({
+            #[cfg(target_os = "macos")]
+            let settings = macos_connection_settings(ui);
+            #[cfg(target_os = "windows")]
+            let settings = [] as [AnyElement; 0];
+            settings
+        })
         .child(settings_file::controls(ui))
         .child(
             view()
@@ -1014,6 +1062,20 @@ fn settings_form(ui: Ui) -> impl IntoElement {
         )
 }
 
+#[cfg(target_os = "macos")]
+fn macos_connection_settings(ui: Ui) -> [AnyElement; 2] {
+    [
+        text("macOS 系统代理只影响遵循系统 HTTP/HTTPS 代理的应用。连接时可能需要授权，断开时恢复原设置。").text_size(px(13.0)).text_color(SUBTLE).into_element(),
+        view().flex_row().gap(px(8.0))
+            .child(native_button(
+                move || if ui.state.with(|s| s.preferences.system_proxy) { "关闭系统代理模式" } else { "启用系统代理模式" },
+                move || ui.busy.get().is_some() || ui.state.with(|s| s.connected), Tone::Standard,
+                move || ui.work("保存系统代理选项…", Job::SetSystemProxy(!ui.state.with_untracked(|s| s.preferences.system_proxy)), false),
+            ))
+            .child(action("恢复系统代理", Tone::Standard, move || ui.busy.get().is_some() || ui.state.with(|s| s.connected), move || ui.work("检查系统代理…", Job::RecoverSystemProxy, false))).into_element(),
+    ]
+}
+
 fn routing_form(ui: Ui) -> impl IntoElement {
     let save = move || {
         ui.work(
@@ -1025,8 +1087,7 @@ fn routing_form(ui: Ui) -> impl IntoElement {
     form_panel("分流规则")
         .child(text("从上到下匹配，未命中时走所选节点。每行一条，例如 DOMAIN-SUFFIX,example.org,DIRECT。").text_size(px(13.0)))
         .child(text("支持 DOMAIN、DOMAIN-SUFFIX、DOMAIN-KEYWORD、IP-CIDR、IP-CIDR6 和 MATCH。动作可选 DIRECT（直连）、PROXY（所选节点）或 REJECT（拒绝）。").text_size(px(13.0)).text_color(SUBTLE))
-        .child(editor("exodys/text-area", ui.draft, "分流规则", "routing-rules", || {}).h(px(150.0))
-            .prop("readonly", move || serde_json::Value::Bool(ui.state.with(|s| s.connected))))
+        .child(editor("exodys/text-area", ui.draft, "分流规则", "routing-rules", || {}, EditorOptions { readonly: Some(computed(move || ui.state.with(|s| s.connected))), ..EditorOptions::default() }).h(px(150.0)))
         .child(when(move || ui.state.with(|s| s.connected), || text("断开连接后可修改分流规则。")))
         .child(view().flex_row().justify_end().gap(px(8.0)).child(cancel(ui)).child(action("保存规则", Tone::Primary,
             move || ui.busy.get().is_some() || ui.state.with(|s| s.connected), save)))
@@ -1059,14 +1120,36 @@ fn cancel(ui: Ui) -> impl IntoElement {
     )
 }
 
+#[derive(Default)]
+struct EditorOptions {
+    auto_focus: bool,
+    max_length: Option<u32>,
+    readonly: Option<Memo<bool>>,
+}
+
+#[cfg(target_os = "windows")]
+use windows::editor;
+
+#[cfg(target_os = "macos")]
 fn editor(
     component: &'static str,
     value: Signal<String>,
     label: &'static str,
     id: &'static str,
     submit: impl Fn() + 'static,
+    options: EditorOptions,
 ) -> NativeView {
-    native(component)
+    let mut field = native(component);
+    if let Some(limit) = options.max_length {
+        field = field.prop("max_length", serde_json::Value::from(limit));
+    }
+    if let Some(readonly) = options.readonly {
+        field = field.prop("readonly", move || serde_json::Value::Bool(readonly.get()));
+    }
+    if options.auto_focus {
+        field = field.prop("auto_focus", serde_json::Value::Bool(true));
+    }
+    field
         .key(id)
         .test_id(id)
         .prop("value", move || serde_json::Value::String(value.get()))

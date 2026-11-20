@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 #[cfg(target_os = "macos")]
 fn main() -> std::process::ExitCode {
     use nsh_platform_macos::{AppOptions, AppSource, Root, run_app};
@@ -15,8 +17,23 @@ fn main() -> std::process::ExitCode {
     run_app(AppSource::Rust(Root::of::<exodys::App>()), options)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 fn main() -> std::process::ExitCode {
-    eprintln!("Exodys's desktop interface requires macOS.");
+    use nsh_platform_windows::{AppOptions, AppSource, Root, run_app};
+
+    run_app(
+        AppSource::Rust(Root::of::<exodys::App>()),
+        AppOptions {
+            app_id: "io.github.bernadeliot-sudo.exodys".into(),
+            title: "Exodys".to_owned(),
+            size: (960, 700),
+            ..AppOptions::default()
+        },
+    )
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn main() -> std::process::ExitCode {
+    eprintln!("Exodys's desktop interface requires macOS or Windows.");
     std::process::ExitCode::FAILURE
 }

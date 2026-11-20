@@ -28,9 +28,9 @@ mod system_proxy {
 
 #[cfg(target_os = "macos")]
 mod macos_native;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod ui;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub use ui::App;
 
 #[cfg(target_os = "macos")]

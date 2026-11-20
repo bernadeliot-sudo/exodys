@@ -330,6 +330,17 @@ pub fn default_directory() -> Result<PathBuf> {
         }
         return Ok(path);
     }
-    let home = std::env::var_os("HOME").ok_or("找不到用户目录。")?;
-    Ok(PathBuf::from(home).join("Library/Application Support/Exodys"))
+    #[cfg(target_os = "windows")]
+    {
+        let local = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .ok_or("找不到 Windows 用户应用数据目录（LOCALAPPDATA）。")?;
+        Ok(local.join("Exodys"))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let home = std::env::var_os("HOME").ok_or("找不到用户目录。")?;
+        Ok(PathBuf::from(home).join("Library/Application Support/Exodys"))
+    }
 }

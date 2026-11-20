@@ -76,6 +76,10 @@ impl Session {
             preferences,
             ..Snapshot::default()
         };
+        #[cfg(target_os = "windows")]
+        if std::mem::take(&mut snapshot.preferences.system_proxy) {
+            store.save_preferences(&snapshot.preferences)?;
+        }
         repair_selection(&mut snapshot);
         Ok(Self {
             store,
@@ -112,6 +116,9 @@ impl Session {
                 Ok(Outcome::default())
             }
             Job::SetSystemProxy(enabled) => {
+                if enabled && !cfg!(target_os = "macos") {
+                    return Err("系统代理仅支持 macOS。".into());
+                }
                 if self.proxy.is_some() {
                     return Err("断开连接后可修改系统代理选项。".into());
                 }
@@ -126,6 +133,9 @@ impl Session {
                 }))
             }
             Job::RecoverSystemProxy => {
+                if !cfg!(target_os = "macos") {
+                    return Err("系统代理仅支持 macOS。".into());
+                }
                 if self.proxy.is_some() {
                     return Err("请先断开连接。".into());
                 }
@@ -147,7 +157,12 @@ impl Session {
                     .directory()
                     .canonicalize()
                     .map_err(|_| "无法打开应用数据文件夹。")?;
-                if parent == workspace
+                let in_workspace = parent == workspace;
+                #[cfg(target_os = "windows")]
+                let in_workspace = in_workspace
+                    || same_file::is_same_file(&parent, &workspace)
+                        .map_err(|_| "无法确认目标文件夹是否为应用数据目录。")?;
+                if in_workspace
                     && matches!(
                         path.file_name()
                             .and_then(|name| name.to_str())
@@ -341,7 +356,7 @@ impl Session {
 
     /// The window is going away. Signal the helper without waiting for a
     /// possible macOS authorization dialog on AppKit's main thread.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     pub(crate) fn close_window(&mut self) {
         self.system_proxy.take();
         self.proxy.take();
