@@ -44,7 +44,7 @@ cargo test --locked
 cargo test --locked --test proxy -- --ignored
 ```
 
-运行实际 AppKit 窗口，验证输入、连接、断开并生成截图。此驱动使用隔离测试目录，不需要系统级录屏或辅助功能权限。
+运行实际 AppKit 窗口，验证配置切换、重命名、粘贴多行文本、搜索后选中正确的节点，以及连接、断开和退出时释放端口。此驱动使用隔离测试目录，可输出窗口截图，不需要系统级录屏或辅助功能权限。
 
 ```bash
 cargo run --locked --example native_smoke -- .nsh/out/Exodys-preview.png
@@ -52,7 +52,7 @@ cargo run --locked --example native_smoke -- .nsh/out/Exodys-preview.png
 
 ## 性能基线
 
-节点列表使用 NSH 虚拟列表和预生成的搜索索引。导入、订阅下载、磁盘写入和代理启动在后台执行。以下为 Apple M1 Pro、macOS 27.2.1 上 release 构建处理 10,000 个合成节点的结果。
+配置侧栏与节点列表使用 AppKit `NSTableView`，搜索使用预生成的索引。操作按钮、搜索框和编辑框分别使用 `NSButton`、`NSSearchField` 和 `NSTextField`，多行导入使用滚动视图中的 `NSTextView`。NSH 负责布局和状态绑定。导入、订阅下载、磁盘写入和代理启动在后台执行。以下是此前在 Apple M1 Pro、macOS 27.2.1 上用 release 构建处理 10,000 个合成节点的数据层基线，不是本次原生控件迁移的渲染性能测量。
 
 | 操作 | 样本 | 中位数 | P90 |
 | --- | ---: | ---: | ---: |

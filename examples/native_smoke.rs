@@ -19,14 +19,14 @@ mod macos {
         import::Source,
         session::{Job, Session},
     };
-    use native::objc2::{MainThreadMarker, MainThreadOnly, Message, msg_send, rc::Retained};
+    use native::objc2::{MainThreadMarker, MainThreadOnly, Message, rc::Retained, sel};
     use native::objc2_app_kit::{
         NSAccessibility, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType,
-        NSBitmapImageFileType, NSBitmapImageRepPropertyKey, NSTextField, NSTextInputClient,
-        NSTextView, NSView, NSWindow, NSWindowStyleMask,
+        NSBitmapImageFileType, NSBitmapImageRepPropertyKey, NSButton, NSSearchField, NSTableView,
+        NSTextField, NSTextInputClient, NSTextView, NSView, NSWindow, NSWindowStyleMask,
     };
     use native::objc2_foundation::{
-        NSDate, NSDictionary, NSPoint, NSRange, NSRect, NSRunLoop, NSSize, NSString,
+        NSDate, NSDictionary, NSIndexSet, NSPoint, NSRange, NSRect, NSRunLoop, NSSize, NSString,
     };
     use nsh_platform_macos as native;
 
@@ -40,13 +40,14 @@ mod macos {
             .local_addr()
             .unwrap()
             .port();
-        {
+        let expected_selection = {
             let mut setup = Session::open(directory.path().into()).unwrap();
-            let mut nodes = String::from("socks5://127.0.0.1:9#Tokyo%20relay\n");
+            let mut nodes = String::new();
             for index in 1..=128 {
                 use std::fmt::Write;
                 writeln!(nodes, "socks5://localhost:9#Osaka%20relay%20{index:03}").unwrap();
             }
+            nodes.push_str("socks5://127.0.0.1:9#Tokyo%20relay\n");
             let id = setup
                 .run(Job::Import(Source::Text(nodes)))
                 .unwrap()
@@ -54,7 +55,25 @@ mod macos {
                 .unwrap();
             setup.run(Job::Rename(id, "演示配置".into())).unwrap();
             setup.run(Job::SetPort(port)).unwrap();
-        }
+            setup
+                .run(Job::Import(Source::Text(
+                    "socks5://localhost:9#Second".into(),
+                )))
+                .unwrap();
+            let snapshot = setup.snapshot();
+            let tokyo = snapshot
+                .catalog
+                .profile(id)
+                .unwrap()
+                .nodes
+                .iter()
+                .find(|n| n.name == "Tokyo relay")
+                .unwrap();
+            exodys::catalog::NodeRef {
+                profile: id,
+                node: tokyo.id.clone(),
+            }
+        };
 
         let mtm = MainThreadMarker::new().expect("AppKit runs on the main thread");
         let app = NSApplication::sharedApplication(mtm);
@@ -86,17 +105,74 @@ mod macos {
         surface.load(native::App::Rust(native::Root::of::<exodys::App>()));
         window.makeKeyAndOrderFront(None);
         app.activate();
-        let search = until("native search field", || by_id(&root, "node-search"));
+        let profiles = table(&root, "native-profile-table", 2);
+        table(&root, "native-node-table", 129);
         println!(
-            "AppKit mount plus loading 129 nodes: {:.1} ms",
+            "Mounted native tables with 129 nodes in {:.1} ms",
             start.elapsed().as_secs_f64() * 1000.0
         );
+        select(&profiles, 1);
+        table(&root, "native-node-table", 1);
+        select(&profiles, 0);
+        table(&root, "native-node-table", 129);
+        press(&root, "重命名");
+        let rename = until("focused name field", || {
+            let host = by_id(&root, "profile-name")?;
+            let field = find(&host, &|v| v.downcast_ref::<NSTextField>().is_some())?
+                .downcast::<NSTextField>()
+                .ok()?;
+            field.currentEditor()?.downcast::<NSTextView>().ok()
+        });
+        unsafe {
+            rename.insertText_replacementRange(
+                &NSString::from_str(&"名".repeat(121)),
+                NSRange::new(0, rename.string().length()),
+            );
+        }
+        until("120-character profile name limit", || {
+            (rename.string().length() == 120).then_some(())
+        });
+        unsafe {
+            rename.insertText_replacementRange(
+                &NSString::from_str("本机演示"),
+                NSRange::new(0, rename.string().length()),
+            );
+            NSTextInputClient::doCommandBySelector(&*rename, sel!(insertNewline:));
+        }
+        table(&root, "native-node-table", 129);
+        let saved: exodys::catalog::Catalog =
+            serde_json::from_slice(&std::fs::read(directory.path().join("profiles.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            saved.profile(expected_selection.profile).unwrap().name,
+            "本机演示"
+        );
+        press(&root, "导入配置");
+        let editor = until("focused scrolling multiline editor", || {
+            let host = by_id(&root, "import-content")?;
+            let editor = find(&host, &|v| v.downcast_ref::<NSTextView>().is_some())?
+                .downcast::<NSTextView>()
+                .ok()?;
+            (editor.enclosingScrollView().is_some()
+                && window
+                    .firstResponder()?
+                    .downcast_ref::<NSTextView>()
+                    .is_some())
+            .then_some(editor)
+        });
+        unsafe {
+            editor.insertText_replacementRange(&NSString::from_str("one\ntwo"), NSRange::new(0, 0))
+        };
+        assert_eq!(editor.string().to_string(), "one\ntwo");
+        button(&root, "导入"); // enabled by the native change event
+        press(&root, "取消");
+        let search = until("native search field", || by_id(&root, "node-search"));
 
-        let search = until("editable AppKit text field", || {
+        let search = until("AppKit search field", || {
             find(&search, &|view| {
-                view.downcast_ref::<NSTextField>().is_some()
+                view.downcast_ref::<NSSearchField>().is_some()
             })?
-            .downcast::<NSTextField>()
+            .downcast::<NSSearchField>()
             .ok()
         });
         assert!(window.makeFirstResponder(Some(&search)));
@@ -106,33 +182,46 @@ mod macos {
         let query = NSString::from_str("Tokyo");
         // NSTextInputClient accepts NSString and a valid replacement span in this empty field.
         unsafe { editor.insertText_replacementRange(&query, NSRange::new(0, 0)) };
-        until("one matching native row", || {
-            (row_count(&root) == 1).then_some(())
+        let nodes = table(&root, "native-node-table", 1);
+        select(&nodes, 0);
+        until("filtered selection persisted by node ID", || {
+            let data = std::fs::read(directory.path().join("preferences.json")).ok()?;
+            let preferences: exodys::catalog::Preferences = serde_json::from_slice(&data).ok()?;
+            (preferences.selected.as_ref() == Some(&expected_selection)).then_some(())
         });
+        unsafe {
+            editor.insertText_replacementRange(&NSString::new(), NSRange::new(0, query.length()))
+        };
+        let unfiltered = table(&root, "native-node-table", 129);
+        assert_eq!(
+            unfiltered.selectedRow(),
+            128,
+            "selection follows Tokyo after clearing search"
+        );
         assert!(window.makeFirstResponder(None));
 
-        let button = until("native connect button", || {
-            by_id(&root, "connection-toggle")
-        });
-        press(&button);
+        press(&root, "连接");
         until("sing-box SOCKS listener", || listening(port).then_some(()));
-        // The button changes as the engine finishes starting; wait for the control to re-enable.
-        until("connected native button", || {
-            button.isAccessibilityEnabled().then_some(())
+        button(&root, "断开");
+        press(&root, "本地端口设置");
+        until("read-only connected port", || {
+            let host = by_id(&root, "local-port")?;
+            let field = find(&host, &|v| v.downcast_ref::<NSTextField>().is_some())?
+                .downcast::<NSTextField>()
+                .ok()?;
+            (!field.isEditable() && field.stringValue().to_string() == port.to_string())
+                .then_some(())
         });
+        press(&root, "取消");
+        table(&root, "native-node-table", 129);
         if let Some(path) = screenshots.as_deref() {
             screenshot(&root, path);
         }
-        press(&button);
+        press(&root, "断开");
         until("listener closed", || (!listening(port)).then_some(()));
-        until("disconnected native button", || {
-            button.isAccessibilityEnabled().then_some(())
-        });
-        press(&button);
+        press(&root, "连接");
         until("listener restarted", || listening(port).then_some(()));
-        until("reconnected native button", || {
-            button.isAccessibilityEnabled().then_some(())
-        });
+        button(&root, "断开");
         surface.stop();
         window.close();
         until("listener closed after quit", || {
@@ -170,28 +259,36 @@ mod macos {
         })
     }
 
-    fn row_count(view: &NSView) -> usize {
-        if view.isHiddenOrHasHiddenAncestor() {
-            return 0;
-        }
-        usize::from(
-            view.accessibilityIdentifier()
-                .is_some_and(|value| value.to_string() == "node-row"),
-        ) + view
-            .subviews()
-            .iter()
-            .map(|view| row_count(&view))
-            .sum::<usize>()
+    fn table(root: &NSView, id: &str, rows: isize) -> Retained<NSTableView> {
+        until(&format!("{id} with {rows} rows"), || {
+            let table = by_id(root, id)?.downcast::<NSTableView>().ok()?;
+            (table.numberOfRows() == rows && table.isEnabled()).then_some(table)
+        })
+    }
+
+    fn select(table: &NSTableView, index: usize) {
+        table.selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(index), false);
+    }
+
+    fn button(root: &NSView, title: &str) -> Retained<NSButton> {
+        until(&format!("enabled button: {title}"), || {
+            find(root, &|v| {
+                !v.isHiddenOrHasHiddenAncestor()
+                    && v.downcast_ref::<NSButton>()
+                        .is_some_and(|b| b.isEnabled() && b.title().to_string() == title)
+            })?
+            .downcast()
+            .ok()
+        })
     }
 
     fn listening(port: u16) -> bool {
         TcpStream::connect_timeout(&address(port), Duration::from_millis(100)).is_ok()
     }
 
-    fn press(button: &NSView) {
-        // NSH's pressable NSViews implement the AppKit accessibility action.
-        let pressed: bool = unsafe { msg_send![button, accessibilityPerformPress] };
-        assert!(pressed, "AppKit did not activate the button");
+    fn press(root: &NSView, title: &str) {
+        let button = button(root, title);
+        unsafe { button.performClick(None) };
     }
 
     fn screenshot(view: &NSView, path: &Path) {
