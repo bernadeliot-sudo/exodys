@@ -29,6 +29,9 @@ objc2-app-kit = { version = "=0.3.2", default-features = false, features = [
     "NSTableCellView", "NSTableColumn", "NSTableHeaderView", "NSTableView", "NSTextField", "NSTextInputClient", "NSTextView", "NSView", "NSUserInterfaceItemIdentification",
 ] }
 
+[build-dependencies]
+cc = "1"
+
 [profile.release]
 strip = "debuginfo"
 lto = "thin"

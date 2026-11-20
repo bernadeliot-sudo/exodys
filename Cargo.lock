@@ -466,6 +466,7 @@ name = "exodys"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "cc",
  "fs2",
  "nsh-base",
  "nsh-core",

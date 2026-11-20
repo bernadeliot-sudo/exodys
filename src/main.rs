@@ -2,6 +2,9 @@
 fn main() -> std::process::ExitCode {
     use nsh_platform_macos::{AppOptions, AppSource, Root, run_app};
 
+    if let Some(result) = exodys::system_proxy::helper_entry() {
+        return result;
+    }
     let options = AppOptions {
         app_id: "io.github.bernadeliot-sudo.exodys".into(),
         title: "Exodys".to_owned(),

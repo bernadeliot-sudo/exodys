@@ -148,6 +148,35 @@ mod macos {
             saved.profile(expected_selection.profile).unwrap().name,
             "本机演示"
         );
+        press(&root, "本地端口设置");
+        press(&root, "启用系统代理模式");
+        press(&root, "关闭系统代理模式");
+        button(&root, "启用系统代理模式"); // Leave the real network untouched before connecting.
+        button(&root, "导出设置");
+        button(&root, "恢复设置");
+        press(&root, "分流规则");
+        button(&root, "保存规则");
+        let rules = until("native routing editor", || {
+            find(&root, &|v| {
+                !v.isHiddenOrHasHiddenAncestor()
+                    && v.downcast_ref::<NSTextView>()
+                        .is_some_and(|text| text.isEditable() && !text.isFieldEditor())
+            })?
+            .downcast::<NSTextView>()
+            .ok()
+        });
+        assert!(window.makeFirstResponder(Some(&rules)));
+        unsafe {
+            rules.insertText_replacementRange(
+                &NSString::from_str("DOMAIN,fixture.test,DIRECT"),
+                NSRange::new(0, 0),
+            );
+        }
+        press(&root, "保存规则");
+        table(&root, "native-node-table", 129);
+        let data = std::fs::read(directory.path().join("preferences.json")).unwrap();
+        let prefs: exodys::catalog::Preferences = serde_json::from_slice(&data).unwrap();
+        assert_eq!(prefs.routing_rules, "DOMAIN,fixture.test,DIRECT");
         press(&root, "导入配置");
         let editor = until("focused scrolling multiline editor", || {
             let host = by_id(&root, "import-content")?;

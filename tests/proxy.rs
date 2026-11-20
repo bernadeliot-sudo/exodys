@@ -28,6 +28,72 @@ fn unused_port() -> u16 {
         .port()
 }
 
+#[test]
+#[ignore = "requires a locally installed sing-box; run with --ignored"]
+fn routing_applies_the_first_match_and_uses_selected_for_unmatched_requests() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut session = Session::open(directory.path().into()).unwrap();
+    // An unavailable upstream makes direct and proxied traffic distinguishable.
+    let upstream = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let dead = upstream.local_addr().unwrap();
+    session
+        .run(Job::Import(Source::Text(format!(
+            "socks5://{dead}#fixture"
+        ))))
+        .unwrap();
+    session.run(Job::SetPort(unused_port())).unwrap();
+    drop(upstream);
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let url = format!("http://{}/proof", listener.local_addr().unwrap());
+    session
+        .run(Job::SetRouting(
+            "IP-CIDR,127.0.0.1/32,DIRECT\nMATCH,REJECT".into(),
+        ))
+        .unwrap();
+    session.run(Job::Connect).unwrap();
+    assert!(session.run(Job::SetRouting(String::new())).is_err());
+    listener.set_nonblocking(true).unwrap();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    stream.set_nonblocking(false).unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    let mut buffer = [0; 1024];
+                    assert!(stream.read(&mut buffer).unwrap() > 0);
+                    stream
+                        .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                        .unwrap();
+                    return;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "direct route never reached loopback"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        session.run(Job::Probe(url.clone())).unwrap();
+    });
+    session.run(Job::Disconnect).unwrap();
+    for rules in [
+        "IP-CIDR,127.0.0.1/32,REJECT\nMATCH,DIRECT",
+        "DOMAIN,unmatched.example,DIRECT",
+    ] {
+        session.run(Job::SetRouting(rules.into())).unwrap();
+        session.run(Job::Connect).unwrap();
+        assert!(session.run(Job::Probe(url.clone())).is_err());
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        session.run(Job::Disconnect).unwrap();
+    }
+}
+
 fn wait_for_socks(port: u16) {
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
@@ -121,6 +187,7 @@ fn requests_traverse_sing_box_and_disconnect_releases_port() {
             let deadline = Instant::now() + Duration::from_secs(4);
             loop {
                 if let Ok((mut stream, _)) = endpoint.accept() {
+                    stream.set_nonblocking(false).unwrap();
                     stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
                     let mut req = [0; 2048];
                     let length = stream.read(&mut req).unwrap();

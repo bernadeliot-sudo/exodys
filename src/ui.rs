@@ -1,3 +1,5 @@
+mod settings_file;
+
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -39,7 +41,7 @@ pub fn App() -> impl IntoElement {
         if let Some(session) = ui.session.get_untracked()
             && let Ok(mut session) = session.try_lock()
         {
-            session.disconnect();
+            session.close_window();
         }
     });
     let connected = computed(move || ui.state.with(|state| state.connected));
@@ -75,6 +77,7 @@ pub fn App() -> impl IntoElement {
                             Page::Rename(id) => rename_form(ui, id).into_element(),
                             Page::Remove(id) => remove_form(ui, id).into_element(),
                             Page::Settings => settings_form(ui).into_element(),
+                            Page::Routing => routing_form(ui).into_element(),
                         })),
                 ),
         )
@@ -87,6 +90,7 @@ enum Page {
     Rename(u64),
     Remove(u64),
     Settings,
+    Routing,
 }
 
 #[derive(Clone, PartialEq)]
@@ -128,10 +132,23 @@ impl Ui {
         self.busy.set(Some("打开配置…"));
         self.notice.set(None);
         spawn(async move {
-            let opened = blocking(|| default_directory().and_then(Session::open)).await;
+            let opened = blocking(|| {
+                let session = Session::open(default_directory()?)?;
+                // Isolated test/development workspaces must not recover a real network configuration.
+                let recovery_error = if std::env::var_os("EXODYS_DATA_DIR").is_none() {
+                    crate::system_proxy::recover().err()
+                } else {
+                    None
+                };
+                Ok::<_, String>((session, recovery_error))
+            })
+            .await;
             batch(|| {
                 match opened {
-                    Ok(Ok(session)) => {
+                    Ok(Ok((session, recovery_error))) => {
+                        if let Some(error) = recovery_error {
+                            self.error(error);
+                        }
                         let state = session.snapshot();
                         self.focus.set(
                             state
@@ -238,14 +255,14 @@ impl Ui {
         let Some(session) = self.session.get_untracked() else {
             return;
         };
-        if let Ok(mut session) = session.try_lock()
-            && session.check_connection()
-        {
-            batch(|| {
-                self.state.set(session.snapshot());
-                self.error("sing-box 已退出。本地代理已断开，请重新连接。");
-            });
-        };
+        // Restoring network preferences may need authorization. Only check child
+        // status on the main thread; the session job handles restoration off it.
+        let failed = session
+            .try_lock()
+            .is_ok_and(|mut session| session.connection_issue().is_some());
+        if failed {
+            self.work("清理已退出的代理…", Job::Disconnect, false);
+        }
     }
 
     fn pick_file(self) {
@@ -905,6 +922,27 @@ fn settings_form(ui: Ui) -> impl IntoElement {
             move || ui.state.with(|s| s.connected),
             || text("断开连接后可修改端口。").text_color(SUBTLE),
         ))
+        .child(action(
+            "分流规则",
+            Tone::Standard,
+            move || ui.busy.get().is_some(),
+            move || {
+                ui.form(
+                    Page::Routing,
+                    ui.state
+                        .with_untracked(|s| s.preferences.routing_rules.clone()),
+                );
+            },
+        ))
+        .child(text("macOS 系统代理只影响遵循系统 HTTP/HTTPS 代理的应用。连接时可能需要授权，断开时恢复原设置。").text_size(px(13.0)).text_color(SUBTLE))
+        .child(view().flex_row().gap(px(8.0))
+            .child(native_button(
+                move || if ui.state.with(|s| s.preferences.system_proxy) { "关闭系统代理模式" } else { "启用系统代理模式" },
+                move || ui.busy.get().is_some() || ui.state.with(|s| s.connected), Tone::Standard,
+                move || ui.work("保存系统代理选项…", Job::SetSystemProxy(!ui.state.with_untracked(|s| s.preferences.system_proxy)), false),
+            ))
+            .child(action("恢复系统代理", Tone::Standard, move || ui.busy.get().is_some() || ui.state.with(|s| s.connected), move || ui.work("检查系统代理…", Job::RecoverSystemProxy, false))))
+        .child(settings_file::controls(ui))
         .child(
             view()
                 .flex_row()
@@ -918,6 +956,24 @@ fn settings_form(ui: Ui) -> impl IntoElement {
                     save,
                 )),
         )
+}
+
+fn routing_form(ui: Ui) -> impl IntoElement {
+    let save = move || {
+        ui.work(
+            "保存分流规则…",
+            Job::SetRouting(ui.draft.get_untracked()),
+            true,
+        )
+    };
+    form_panel("分流规则")
+        .child(text("从上到下匹配，未命中时走所选节点。每行一条，例如 DOMAIN-SUFFIX,example.org,DIRECT。").text_size(px(13.0)))
+        .child(text("支持 DOMAIN、DOMAIN-SUFFIX、DOMAIN-KEYWORD、IP-CIDR、IP-CIDR6 和 MATCH。动作可选 DIRECT（直连）、PROXY（所选节点）或 REJECT（拒绝）。").text_size(px(13.0)).text_color(SUBTLE))
+        .child(editor("exodys/text-area", ui.draft, "分流规则", "routing-rules", || {}).h(px(150.0))
+            .prop("readonly", move || serde_json::Value::Bool(ui.state.with(|s| s.connected))))
+        .child(when(move || ui.state.with(|s| s.connected), || text("断开连接后可修改分流规则。")))
+        .child(view().flex_row().justify_end().gap(px(8.0)).child(cancel(ui)).child(action("保存规则", Tone::Primary,
+            move || ui.busy.get().is_some() || ui.state.with(|s| s.connected), save)))
 }
 
 fn form_panel(title: &'static str) -> View {
@@ -955,6 +1011,7 @@ fn editor(
     submit: impl Fn() + 'static,
 ) -> NativeView {
     native(component)
+        .key(id)
         .test_id(id)
         .prop("value", move || serde_json::Value::String(value.get()))
         .prop("placeholder", serde_json::Value::String(label.into()))

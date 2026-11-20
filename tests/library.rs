@@ -75,11 +75,23 @@ fn workspace_persists_profile_selection_and_port() {
         .run(Job::Rename(id, "Example routes".into()))
         .unwrap();
     session.run(Job::SetPort(21991)).unwrap();
+    session
+        .run(Job::SetRouting("IP-CIDR,10.0.0.0/8,DIRECT".into()))
+        .unwrap();
+    assert!(
+        session
+            .run(Job::SetRouting("IP-CIDR,broken,DIRECT".into()))
+            .is_err()
+    );
     drop(session);
 
     let mut reopened = Session::open(directory.path().into()).unwrap();
     let snapshot = reopened.snapshot();
     assert_eq!(snapshot.preferences.port, 21991);
+    assert_eq!(
+        snapshot.preferences.routing_rules,
+        "IP-CIDR,10.0.0.0/8,DIRECT"
+    );
     assert_eq!(snapshot.catalog.profile(id).unwrap().name, "Example routes");
     assert_eq!(snapshot.node().unwrap().name, "Tokyo");
     assert!(!snapshot.connected);
@@ -98,12 +110,53 @@ fn workspace_persists_profile_selection_and_port() {
     assert!(reopened.snapshot().node().is_none());
 }
 
+#[test]
+fn settings_transfer_preserves_selection_and_recovers_from_invalid_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("preferences.json"),
+        r#"{"selected":null,"port":21992}"#,
+    )
+    .unwrap();
+    let mut session = Session::open(workspace.clone()).unwrap();
+    assert!(session.snapshot().preferences.routing_rules.is_empty());
+    assert!(
+        !session.snapshot().preferences.system_proxy,
+        "old settings must not opt in"
+    );
+    session.run(Job::SetSystemProxy(true)).unwrap();
+    session
+        .run(Job::Import(Source::Text(CLASH.into())))
+        .unwrap();
+    let rules = "DOMAIN,example.org,DIRECT";
+    session.run(Job::SetRouting(rules.into())).unwrap();
+    let state = session.snapshot();
+    let backup = dir.path().join("portable.json");
+    session.run(Job::ExportSettings(backup.clone())).unwrap();
+    assert!(
+        session
+            .run(Job::ExportSettings(workspace.join("profiles.json")))
+            .is_err()
+    );
+    session.run(Job::SetRouting(String::new())).unwrap();
+    session.run(Job::SetPort(21993)).unwrap();
+    session.run(Job::RestoreSettings(backup.clone())).unwrap();
+    std::fs::write(&backup, "{}").unwrap();
+    assert!(session.run(Job::RestoreSettings(backup)).is_err());
+    drop(session);
+    let restored = Session::open(workspace).unwrap().snapshot();
+    assert!(state.preferences == restored.preferences && state.catalog == restored.catalog);
+}
+
 fn respond(listener: &TcpListener, status: &str, body: &str) {
     listener.set_nonblocking(true).unwrap();
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         match listener.accept() {
             Ok((mut stream, _)) => {
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .unwrap();

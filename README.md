@@ -2,15 +2,21 @@
 
 Exodys 是独立开发的 macOS 代理客户端。它使用 Rust 和 [Native Shell](https://nsh.dev/) 0.6.0 渲染原生 AppKit 界面，以本机安装的 [sing-box](https://sing-box.sagernet.org/) 驱动 HTTP 和 SOCKS5 代理。
 
+[macOS 功能对齐清单](docs/karing-parity.md)区分已验证流程、支持范围和待补功能。
+
 ## 使用
 
 1. 选择 **导入配置**，粘贴 HTTP(S) 订阅地址、节点链接或配置内容，也可以打开本地文件。
-2. 搜索并选择节点，然后点击 **连接**。**测试代理**会通过选中的节点向 Cloudflare 发出一次 HTTPS 请求，并显示请求耗时。
+2. 搜索并选择节点，然后点击 **连接**。**测试代理**会通过本地代理按当前分流规则向 Cloudflare 发出一次 HTTPS 请求，并显示请求耗时。
 3. 在需要代理的应用中指定 `127.0.0.1:2080`。HTTP 和 SOCKS5 共用这个端口，可在 **本地端口设置**中修改。连接中可选择其他节点。每次打开应用都从断开状态开始。
 
-导入会从 Clash YAML 的 `proxies` 或 sing-box JSON 的 `outbounds` 提取独立节点，也支持纯文本和 Base64 编码的节点链接列表。现有支持范围包括 SOCKS5、HTTP、Shadowsocks、Trojan、VLESS、VMess、Hysteria2 和 TUIC 的常用配置。协议的最终可用性取决于节点选项与本机 sing-box 版本。导入报告会显示跳过的条目数量。订阅刷新失败时保留上次成功的内容。
+导入会从 Clash YAML 的 `proxies` 或 sing-box JSON 的 `outbounds` 提取独立节点，也支持纯文本和 Base64 节点链接列表，以及 Shadowsocks SIP008 v1 JSON（含常见服务器数组格式）。SIP008 中使用插件的条目会计入跳过数量。现有支持范围包括 SOCKS5、HTTP、Shadowsocks、Trojan、VLESS、VMess、Hysteria2 和 TUIC 的常用配置。协议的最终可用性取决于节点选项与本机 sing-box 版本。导入报告会显示跳过的条目数量。订阅刷新失败时保留上次成功的内容。
 
-当前范围是 macOS 本机代理。应用级或手动设置的系统代理需要填入本地地址。TUN、自动系统代理、路由规则迁移及 Karing 备份恢复尚未实现。
+**macOS 系统代理（默认关闭）**：断开时打开侧栏齿轮，点 **启用系统代理模式**，再连接节点。Exodys 等待本地端口就绪后，将连接时主网络服务的 HTTP 和 HTTPS 代理指向本机端口；macOS 可能要求授权。已有启用的 HTTP/HTTPS 代理、PAC 或自动发现（WPAD）时，Exodys 不接管。拒绝授权或发现不兼容设置时，本次连接失败，不会显示已连接。更换主网络服务后请断开再连接。只影响遵循系统代理的应用，不改系统 SOCKS、DNS 或 TUN。
+
+断开时恢复原设置；应用异常退出时，独立守护进程通过管道关闭触发恢复。守护进程也被终止或机器重启时，正常打开 Exodys 会检查本地恢复记录；也可在齿轮菜单点 **恢复系统代理**。恢复仅处理仍指向 Exodys 的设置，不覆盖用户后来更改的代理。端口／规则导出不包含此模式，导入设置不会替另一台 Mac 启用系统代理。路由规则迁移及 Karing 备份恢复尚未实现。
+
+在侧栏齿轮打开 **分流规则**，每行填写一条规则，按顺序匹配。支持 `DOMAIN`、`DOMAIN-SUFFIX`、`DOMAIN-KEYWORD`、`IP-CIDR`、`IP-CIDR6` 和末尾的 `MATCH`。动作可选 `DIRECT`（直连）、`PROXY`（当前节点）或 `REJECT`（拒绝）。例如 `DOMAIN-SUFFIX,example.org,DIRECT` 使该域名及其子域名直连。未匹配的请求走当前节点。断开时可修改规则，下次连接生效。**导出设置** 与 **恢复设置** 通过本地 JSON 文件转移端口和分流规则。
 
 配置文件存储在 `~/Library/Application Support/Exodys`。订阅地址和节点认证随配置保存在权限为 `0600` 的本地文件中，可能包含敏感信息。开发与测试可将 `EXODYS_DATA_DIR` 指向一个单独的绝对路径。
 

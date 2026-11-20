@@ -1,7 +1,30 @@
 pub mod catalog;
 pub mod engine;
 pub mod import;
+mod routing;
 pub mod session;
+mod settings_file;
+#[cfg(target_os = "macos")]
+pub mod system_proxy;
+#[cfg(not(target_os = "macos"))]
+mod system_proxy {
+    use crate::Result;
+    pub(crate) struct Lease;
+    impl Lease {
+        pub fn acquire(_: u16) -> Result<Self> {
+            Err("系统代理仅支持 macOS。".into())
+        }
+        pub fn release(self) -> Result<()> {
+            Ok(())
+        }
+        pub fn alive(&mut self) -> bool {
+            false
+        }
+    }
+    pub fn recover() -> Result<()> {
+        Ok(())
+    }
+}
 
 #[cfg(target_os = "macos")]
 mod macos_native;

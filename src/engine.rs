@@ -41,15 +41,21 @@ pub(crate) struct Prepared {
     port: u16,
 }
 
-pub(crate) fn prepare(binary: &Path, directory: &Path, node: &Node, port: u16) -> Result<Prepared> {
+pub(crate) fn prepare(
+    binary: &Path,
+    directory: &Path,
+    node: &Node,
+    port: u16,
+    routing_rules: &str,
+) -> Result<Prepared> {
     let mut outbound = node.outbound.clone();
     outbound.insert("tag".into(), json!("selected"));
     let value = json!({
         "log": { "level": "warn" },
         "inbounds": [{ "type": "mixed", "listen": "127.0.0.1", "listen_port": port }],
-        "outbounds": [Value::Object(outbound)],
+        "outbounds": [Value::Object(outbound), { "type": "direct", "tag": "direct" }],
         "dns": { "servers": [{ "type": "local", "tag": "system-dns" }], "final": "system-dns" },
-        "route": { "final": "selected", "default_domain_resolver": "system-dns" }
+        "route": { "rules": crate::routing::parse(routing_rules)?, "final": "selected", "default_domain_resolver": "system-dns" }
     });
     let mut file =
         tempfile::NamedTempFile::new_in(directory).map_err(|_| "无法创建引擎配置。".to_owned())?;

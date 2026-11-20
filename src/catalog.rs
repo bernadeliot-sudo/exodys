@@ -199,6 +199,10 @@ pub struct NodeRef {
 pub struct Preferences {
     pub selected: Option<NodeRef>,
     pub port: u16,
+    #[serde(default)]
+    pub routing_rules: String,
+    #[serde(default)]
+    pub system_proxy: bool,
 }
 
 impl Default for Preferences {
@@ -206,6 +210,8 @@ impl Default for Preferences {
         Self {
             selected: None,
             port: DEFAULT_PORT,
+            routing_rules: String::new(),
+            system_proxy: false,
         }
     }
 }
@@ -245,6 +251,7 @@ impl Store {
     pub(crate) fn load(&self) -> Result<(Catalog, Preferences)> {
         let mut catalog: Catalog = self.read("profiles.json", MAX_CATALOG_BYTES)?;
         let preferences: Preferences = self.read("preferences.json", 32 * 1024)?;
+        crate::routing::parse(&preferences.routing_rules)?;
         let mut profile_ids = HashSet::new();
         if catalog.profiles.len() > MAX_PROFILES || preferences.port < 1024 {
             return Err("本地配置数量或端口无效。".into());
