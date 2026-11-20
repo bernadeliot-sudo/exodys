@@ -1,6 +1,6 @@
 # Exodys
 
-Exodys 是独立开发的 macOS 代理客户端。它使用 Rust 和 [Native Shell](https://nsh.dev/) 0.6.0 渲染原生 AppKit 界面，以本机安装的 [sing-box](https://sing-box.sagernet.org/) 驱动 HTTP 和 SOCKS5 代理。
+Exodys 是独立开发的 macOS 代理客户端。它使用 Rust 和 [Native Shell](https://nsh.dev/) 0.6.1 渲染原生 AppKit 界面，以本机安装的 [sing-box](https://sing-box.sagernet.org/) 驱动 HTTP 和 SOCKS5 代理。
 
 [macOS 功能对齐清单](docs/karing-parity.md)区分已验证流程、支持范围和待补功能。
 
