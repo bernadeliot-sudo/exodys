@@ -115,12 +115,25 @@ pub fn parse(bytes: &[u8], name: String, subscription: Option<String>) -> Result
     if content.starts_with(['{', '[']) {
         let json: Value =
             serde_json::from_str(content).map_err(|_| "JSON 配置语法有误。".to_owned())?;
-        if let Some(items) = json
-            .get("outbounds")
-            .and_then(Value::as_array)
-            .or_else(|| json.as_array())
-        {
+        if json.get("servers").is_some() && json.get("outbounds").is_none() {
+            if json.get("version").and_then(Value::as_u64) != Some(1) {
+                return Err("不支持的 SIP008 版本。".into());
+            }
+            let servers = json
+                .get("servers")
+                .and_then(Value::as_array)
+                .ok_or("SIP008 配置缺少 servers 列表。")?;
+            entries.extend(servers.iter().take(MAX_NODES + 1).map(sip008_entry));
+        } else if let Some(items) = json.get("outbounds").and_then(Value::as_array) {
             entries.extend(items.iter().take(MAX_NODES + 1).map(sing_box_entry));
+        } else if let Some(items) = json.as_array() {
+            entries.extend(items.iter().take(MAX_NODES + 1).map(|item| {
+                if item.get("type").is_some() {
+                    sing_box_entry(item)
+                } else {
+                    sip008_entry(item)
+                }
+            }));
         } else {
             entries.push(sing_box_entry(&json));
         }
@@ -175,6 +188,22 @@ fn title(s: &str) -> String {
 }
 
 type Entry = Option<(String, Map<String, Value>)>;
+
+fn sip008_entry(value: &Value) -> Entry {
+    let host = required(value, "server")?;
+    let mut node = base_outbound("shadowsocks", host, port(value.get("server_port")?)?)?;
+    node.insert("method".into(), json!(required(value, "method")?));
+    auth(&mut node, value, "password")?;
+    // Plugin options are plugin-specific; ignoring them can change the connection.
+    for key in ["plugin", "plugin_opts"] {
+        if let Some(option) = value.get(key)
+            && !option.as_str().is_some_and(str::is_empty)
+        {
+            return None;
+        }
+    }
+    Some((required(value, "remarks").unwrap_or(host).to_owned(), node))
+}
 
 fn sing_box_entry(value: &Value) -> Entry {
     let fields = value.as_object()?;
