@@ -23,7 +23,8 @@ mod macos {
     use native::objc2_app_kit::{
         NSAccessibility, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType,
         NSBitmapImageFileType, NSBitmapImageRepPropertyKey, NSButton, NSSearchField, NSTableView,
-        NSTextField, NSTextInputClient, NSTextView, NSView, NSWindow, NSWindowStyleMask,
+        NSTextField, NSTextInputClient, NSTextView, NSToolbarItem, NSView, NSWindow,
+        NSWindowStyleMask,
     };
     use native::objc2_foundation::{
         NSDate, NSDictionary, NSIndexSet, NSPoint, NSRange, NSRect, NSRunLoop, NSSize, NSString,
@@ -200,9 +201,27 @@ mod macos {
         );
         assert!(window.makeFirstResponder(None));
 
-        press(&root, "连接");
+        assert!(
+            !window
+                .toolbar()
+                .unwrap()
+                .items()
+                .iter()
+                .any(|item| item.itemIdentifier().to_string() == "probe")
+        );
+        assert!(window.subtitle().to_string().contains("Tokyo relay"));
+        assert!(
+            window
+                .subtitle()
+                .to_string()
+                .contains(&address(port).to_string())
+        );
+        toolbar_item(&window, "copy", "复制地址");
+        activate(&app, &toolbar_item(&window, "toggle", "连接"));
         until("sing-box SOCKS listener", || listening(port).then_some(()));
-        button(&root, "断开");
+        toolbar_item(&window, "toggle", "断开");
+        toolbar_item(&window, "probe", "测试代理");
+        assert!(window.subtitle().to_string().contains("运行中"));
         press(&root, "本地端口设置");
         until("read-only connected port", || {
             let host = by_id(&root, "local-port")?;
@@ -215,14 +234,19 @@ mod macos {
         press(&root, "取消");
         table(&root, "native-node-table", 129);
         if let Some(path) = screenshots.as_deref() {
-            screenshot(&root, path);
+            // Window and content are retained while caching their common frame view.
+            let frame = unsafe { root.superview() }.unwrap();
+            screenshot(&frame, path);
         }
-        press(&root, "断开");
+        activate(&app, &toolbar_item(&window, "toggle", "断开"));
         until("listener closed", || (!listening(port)).then_some(()));
-        press(&root, "连接");
+        activate(&app, &toolbar_item(&window, "toggle", "连接"));
         until("listener restarted", || listening(port).then_some(()));
-        button(&root, "断开");
+        toolbar_item(&window, "toggle", "断开");
         surface.stop();
+        until("window toolbar detached on stop", || {
+            window.toolbar().is_none().then_some(())
+        });
         window.close();
         until("listener closed after quit", || {
             (!listening(port)).then_some(())
@@ -280,6 +304,25 @@ mod macos {
             .downcast()
             .ok()
         })
+    }
+
+    fn toolbar_item(window: &NSWindow, id: &str, label: &str) -> Retained<NSToolbarItem> {
+        until(&format!("window toolbar item: {label}"), || {
+            let toolbar = window.toolbar()?;
+            assert_eq!(toolbar.identifier().to_string(), "exodys.connection");
+            toolbar.visibleItems()?.iter().find(|item| {
+                item.itemIdentifier().to_string() == id
+                    && item.label().to_string() == label
+                    && item.isEnabled()
+            })
+        })
+    }
+
+    fn activate(app: &NSApplication, item: &NSToolbarItem) {
+        let target = item.target().unwrap();
+        assert!(unsafe {
+            app.sendAction_to_from(item.action().unwrap(), Some(&target), Some(item))
+        });
     }
 
     fn listening(port: u16) -> bool {

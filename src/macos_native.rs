@@ -12,10 +12,12 @@ use serde_json::Value;
 
 mod editors;
 mod tables;
+mod window_toolbar;
 
 pub fn register_components(components: &Components) {
     editors::register(components);
     tables::register(components);
+    window_toolbar::register(components);
     components.register(
         "exodys/search-field",
         Rc::new(|context| Box::new(SearchField::new(context))),

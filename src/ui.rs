@@ -20,7 +20,6 @@ const INK: AdaptiveColor = AdaptiveColor::rgb(0x1d1d1f, 0xf5f5f7);
 const SUBTLE: AdaptiveColor = AdaptiveColor::rgb(0x6e6e73, 0x98989d);
 const LINE: AdaptiveColor = AdaptiveColor::rgb(0xd6d6dc, 0x48484a);
 const ERROR: AdaptiveColor = AdaptiveColor::rgb(0xff3b30, 0xff6961);
-const SUCCESS: AdaptiveColor = AdaptiveColor::rgb(0x34c759, 0x30d158);
 
 fn macos_backdrop(material: MacOsBackdropMaterial) -> MacOsBackdrop {
     let mut backdrop = MacOsBackdrop::default();
@@ -381,90 +380,44 @@ fn sidebar(ui: Ui) -> impl IntoElement {
 }
 
 fn connection(ui: Ui) -> impl IntoElement {
-    let connected = computed(move || ui.state.with(|s| s.connected));
-    let selected_name = computed(move || ui.state.with(|s| s.node().map(|node| node.name.clone())));
-    let socket = computed(move || ui.state.with(|s| address(s.preferences.port).to_string()));
-    toolbar()
-        .accessibility_label("连接工具栏")
-        .h(px(52.0))
-        .px(px(16.0))
-        .flex_row()
-        .items_center()
-        .gap(px(9.0))
-        .border_b_1()
-        .border_color(LINE)
-        .child(
-            view()
-                .size(px(8.0))
-                .rounded_full()
-                .bg(move || if connected.get() { SUCCESS } else { SUBTLE }),
-        )
-        .child(
-            text(move || {
-                if connected.get() {
-                    "运行中"
-                } else {
-                    "已断开"
-                }
+    // Only a lifecycle anchor occupies the content tree. AppKit lays out the toolbar.
+    native("exodys/window-toolbar")
+        .h(px(0.0))
+        .prop("state", move || {
+            ui.state.with(|state| {
+                serde_json::json!({
+                    "connected": state.connected,
+                    "node": state.node().map(|node| node.name.as_str()),
+                    "address": address(state.preferences.port).to_string(),
+                    "busy": ui.busy.get().is_some(),
+                })
             })
-            .text_size(px(12.0))
-            .text_color(SUBTLE),
-        )
-        .child(
-            view().flex_1().min_w(px(0.0)).pl(px(7.0)).child(
-                text(move || {
-                    selected_name.with(|name| name.as_deref().unwrap_or("未选择节点").to_owned())
-                })
-                .truncate()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_size(px(14.0)),
+        })
+        .on_native_event(move |event: &NativeEvent| match &*event.name {
+            "copy" => {
+                set_clipboard(
+                    ui.state
+                        .with_untracked(|s| address(s.preferences.port).to_string()),
+                );
+                ui.notice.set(Some(Notice {
+                    message: "已复制本地代理地址。".into(),
+                    error: false,
+                }));
+            }
+            "probe" if ui.state.with_untracked(|s| s.connected) => ui.work(
+                "通过代理发送测试请求…",
+                Job::Probe("https://cp.cloudflare.com/generate_204".into()),
+                false,
             ),
-        )
-        .child(
-            text(move || format!("HTTP / SOCKS5  ·  {}", socket.get()))
-                .text_size(px(11.0))
-                .text_color(SUBTLE)
-                .truncate(),
-        )
-        .child(panel_button("复制地址", move || {
-            set_clipboard(socket.get_untracked());
-            ui.notice.set(Some(Notice {
-                message: "已复制本地代理地址。".into(),
-                error: false,
-            }));
-        }))
-        .child(when(
-            move || connected.get(),
-            move || {
-                panel_button("测试代理", move || {
-                    ui.work(
-                        "通过代理发送测试请求…",
-                        Job::Probe("https://cp.cloudflare.com/generate_204".into()),
-                        false,
-                    );
-                })
-            },
-        ))
-        .child(
-            native_button(
-                move || if connected.get() { "断开" } else { "连接" },
-                move || ui.busy.get().is_some() || selected_name.with(Option::is_none),
-                Tone::Primary,
-                move || {
-                    if connected.get_untracked() {
-                        ui.work("断开连接…", Job::Disconnect, false);
-                    } else {
-                        ui.work("启动本地代理…", Job::Connect, false);
-                    }
-                },
-            )
-            .test_id("connection-toggle")
-            .min_w(px(70.0)),
-        )
-}
-
-fn panel_button(label: &'static str, execute: impl Fn() + 'static) -> impl IntoElement {
-    native_button(move || label, || false, Tone::Standard, execute)
+            "toggle" => {
+                if ui.state.with_untracked(|s| s.connected) {
+                    ui.work("断开连接…", Job::Disconnect, false);
+                } else if ui.state.with_untracked(|s| s.node().is_some()) {
+                    ui.work("启动本地代理…", Job::Connect, false);
+                }
+            }
+            _ => {}
+        })
 }
 
 fn native_button(

@@ -24,6 +24,7 @@ nsh-base = { version = "=0.6.0", default-features = false }
 nsh-platform-macos = { version = "=0.6.0", default-features = false }
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = [
     "std", "NSAccessibility", "NSAccessibilityProtocols", "NSButton", "NSCell", "NSClipView", "NSColor",
+    "NSImage", "NSToolbar", "NSToolbarItem", "NSWindow",
     "NSControl", "NSLayoutConstraint", "NSResponder", "NSScrollView", "NSSearchField",
     "NSTableCellView", "NSTableColumn", "NSTableHeaderView", "NSTableView", "NSTextField", "NSTextInputClient", "NSTextView", "NSView", "NSUserInterfaceItemIdentification",
 ] }
