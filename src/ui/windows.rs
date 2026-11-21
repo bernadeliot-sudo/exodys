@@ -1,4 +1,9 @@
-use nsh_core::element::input;
+use ::windows::Win32::Graphics::DirectWrite::{
+    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+    DWRITE_FONT_WEIGHT_NORMAL, DWriteCreateFactory, IDWriteFactory, IDWriteFont,
+};
+use ::windows::core::HSTRING;
+use nsh_core::element::{Text, input};
 
 use super::*;
 use crate::catalog::Catalog;
@@ -11,6 +16,20 @@ const SELECTED: AdaptiveColor = AdaptiveColor::rgb(0xdbeafe, 0x243f59);
 
 pub(super) fn button<T: Into<String>>(
     label: impl Fn() -> T + 'static,
+    disabled: impl Fn() -> bool + 'static,
+    tone: Tone,
+    press: impl Fn() + 'static,
+) -> View {
+    button_with_text(
+        text(move || label().into()).text_size(px(12.0)),
+        disabled,
+        tone,
+        press,
+    )
+}
+
+fn button_with_text(
+    content: Text,
     disabled: impl Fn() -> bool + 'static,
     tone: Tone,
     press: impl Fn() + 'static,
@@ -30,11 +49,7 @@ pub(super) fn button<T: Into<String>>(
         .border_1()
         .border_color(border)
         .hover(|style| style.opacity(0.86))
-        .child(
-            text(move || label().into())
-                .text_size(px(12.0))
-                .text_color(foreground),
-        )
+        .child(content.text_color(foreground))
 }
 
 pub(super) fn icon_button(
@@ -43,17 +58,93 @@ pub(super) fn icon_button(
     disabled: impl Fn() -> bool + 'static,
     press: impl Fn() + 'static,
 ) -> View {
-    let fallback = match symbol {
-        "plus" => "导入",
-        "gearshape" => "设置",
-        "waveform.path.ecg" => "测试",
-        "doc.on.doc" => "复制",
-        _ => label,
+    let (glyph, fallback) = match symbol {
+        "plus" => (Some('\u{e710}'), "导入"),
+        "gearshape" => (Some('\u{e713}'), "设置"),
+        "waveform.path.ecg" => (Some('\u{e9d9}'), "测试"),
+        "doc.on.doc" => (Some('\u{e8c8}'), "复制"),
+        "arrow.clockwise" => (Some('\u{e72c}'), label),
+        "clock" => (Some('\u{e917}'), label),
+        "pencil" => (Some('\u{e70f}'), label),
+        "trash" => (Some('\u{e74d}'), label),
+        _ => (None, label),
     };
-    button(move || fallback, disabled, Tone::Standard, press)
-        .h(px(30.0))
-        .flex_shrink_0()
-        .label(label)
+    let button = match glyph.and_then(|glyph| icon_font(glyph).map(|font| (glyph, font))) {
+        Some((glyph, font)) => button_with_text(
+            text(glyph.to_string())
+                .font_family(font)
+                .text_size(px(16.0)),
+            disabled,
+            Tone::Standard,
+            press,
+        )
+        .w(px(34.0)),
+        None => button(move || fallback, disabled, Tone::Standard, press),
+    };
+    button.h(px(30.0)).flex_shrink_0().label(label).tooltip(
+        view()
+            .rounded(px(4.0))
+            .bg(INK)
+            .px(px(8.0))
+            .py(px(4.0))
+            .child(text(label).text_size(px(12.0)).text_color(SURFACE)),
+    )
+}
+
+const ICON_FAMILIES: [&str; 2] = ["Segoe Fluent Icons", "Segoe MDL2 Assets"];
+
+fn icon_font(glyph: char) -> Option<&'static str> {
+    thread_local! {
+        static FONTS: [Option<IDWriteFont>; ICON_FAMILIES.len()] = load_icon_fonts();
+    }
+    FONTS.with(|fonts| {
+        ICON_FAMILIES
+            .into_iter()
+            .zip(fonts)
+            .find_map(|(name, font)| {
+                let font = font.as_ref()?;
+                // SAFETY: DirectWrite owns the font and this call takes a Unicode scalar.
+                unsafe { font.HasCharacter(glyph as u32) }
+                    .ok()
+                    .filter(|present| present.as_bool())
+                    .map(|_| name)
+            })
+    })
+}
+
+fn load_icon_fonts() -> [Option<IDWriteFont>; ICON_FAMILIES.len()] {
+    // SAFETY: The handles and output parameters are valid for the DirectWrite calls.
+    unsafe {
+        let Ok(factory) = DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED) else {
+            return Default::default();
+        };
+        let mut collection = None;
+        let Ok(()) = factory.GetSystemFontCollection(&mut collection, false) else {
+            return Default::default();
+        };
+        let Some(collection) = collection else {
+            return Default::default();
+        };
+        ICON_FAMILIES.map(|name| {
+            let mut index = 0;
+            let mut exists = Default::default();
+            collection
+                .FindFamilyName(&HSTRING::from(name), &mut index, &mut exists)
+                .ok()?;
+            if !exists.as_bool() {
+                return None;
+            }
+            collection
+                .GetFontFamily(index)
+                .ok()?
+                .GetFirstMatchingFont(
+                    DWRITE_FONT_WEIGHT_NORMAL,
+                    DWRITE_FONT_STRETCH_NORMAL,
+                    DWRITE_FONT_STYLE_NORMAL,
+                )
+                .ok()
+        })
+    }
 }
 
 fn press_target(disabled: impl Fn() -> bool + 'static, press: impl Fn() + 'static) -> View {
