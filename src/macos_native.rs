@@ -13,6 +13,8 @@ use serde_json::Value;
 mod editors;
 mod tables;
 
+pub(crate) use editors::take_secure_input;
+
 pub fn register_components(components: &Components) {
     editors::register(components);
     tables::register(components);

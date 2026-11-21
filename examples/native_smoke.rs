@@ -19,21 +19,92 @@ mod macos {
         import::Source,
         session::{Job, Session},
     };
-    use native::objc2::{MainThreadMarker, MainThreadOnly, Message, rc::Retained, sel};
+    use native::objc2::{
+        MainThreadMarker, MainThreadOnly, Message,
+        rc::{Retained, autoreleasepool},
+        sel,
+    };
     use native::objc2_app_kit::{
-        NSAccessibility, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType,
-        NSBitmapImageFileType, NSBitmapImageRepPropertyKey, NSButton, NSSearchField, NSTableView,
-        NSTextField, NSTextInputClient, NSTextView, NSView, NSWindow, NSWindowButton,
-        NSWindowStyleMask, NSWindowTitleVisibility,
+        NSAccessibility, NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua,
+        NSAppearanceNameDarkAqua, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType,
+        NSBitmapImageFileType, NSBitmapImageRep, NSBitmapImageRepPropertyKey, NSButton,
+        NSColorSpace, NSSearchField, NSSecureTextField, NSTableView, NSTextField,
+        NSTextInputClient, NSTextView, NSView, NSWindow, NSWindowButton, NSWindowStyleMask,
+        NSWindowTitleVisibility,
     };
     use native::objc2_foundation::{
         NSDate, NSDictionary, NSIndexSet, NSPoint, NSRange, NSRect, NSRunLoop, NSSize, NSString,
     };
     use nsh_platform_macos as native;
 
+    fn fill_field(window: &NSWindow, root: &NSView, id: &str, value: &str) {
+        let field = until(id, || {
+            let host = by_id(root, id)?;
+            find(&host, &|view| view.downcast_ref::<NSTextField>().is_some())?
+                .downcast::<NSTextField>()
+                .ok()
+        });
+        assert!(window.makeFirstResponder(Some(&field)));
+        let editor = until(id, || field.currentEditor()?.downcast::<NSTextView>().ok());
+        unsafe {
+            editor.insertText_replacementRange(
+                &NSString::from_str(value),
+                NSRange::new(0, editor.string().length()),
+            );
+        }
+    }
+
+    fn import_subscription_fixture(session: &mut Session) -> u64 {
+        use std::io::{BufRead, BufReader, Write};
+
+        let listener = TcpListener::bind(address(0)).unwrap();
+        let url = format!("http://{}/fixture", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let deadline = Instant::now() + Duration::from_secs(3);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(e)
+                            if e.kind() == std::io::ErrorKind::WouldBlock
+                                && Instant::now() < deadline =>
+                        {
+                            std::thread::park_timeout(Duration::from_millis(10))
+                        }
+                        Err(e) => panic!("subscription request: {e}"),
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut reader = BufReader::new(&mut stream);
+                let mut line = String::new();
+                while reader.read_line(&mut line).unwrap() > 0 && line != "\r\n" {
+                    line.clear();
+                }
+                let body = "socks5://localhost:9#Second";
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            });
+            session
+                .run(Job::Import(Source::Subscription(url)))
+                .unwrap()
+                .focus
+                .unwrap()
+        })
+    }
+
     pub fn run() {
         let screenshots = std::env::args_os().nth(1).map(std::path::PathBuf::from);
         let directory = tempfile::tempdir().unwrap();
+        let shared = tempfile::tempdir().unwrap();
+        let sync_passphrase = "fixture-only native sync passphrase";
         // This is a standalone test process. Set its workspace before AppKit or NSH starts threads.
         unsafe { std::env::set_var("EXODYS_DATA_DIR", directory.path()) };
         let port = TcpListener::bind(("127.0.0.1", 0))
@@ -41,7 +112,7 @@ mod macos {
             .local_addr()
             .unwrap()
             .port();
-        let expected_selection = {
+        let (expected_selection, second_selection) = {
             let mut setup = Session::open(directory.path().into()).unwrap();
             let mut nodes = String::new();
             for index in 1..=128 {
@@ -56,10 +127,33 @@ mod macos {
                 .unwrap();
             setup.run(Job::Rename(id, "演示配置".into())).unwrap();
             setup.run(Job::SetPort(port)).unwrap();
+            let rule_json = directory.path().join("fixture.json");
+            let rule_bin = directory.path().join("fixture.srs");
+            std::fs::write(
+                &rule_json,
+                r#"{"version":3,"rules":[{"domain":["fixture.test"]}]}"#,
+            )
+            .unwrap();
+            let compiled = std::process::Command::new(exodys::engine::engine_path().unwrap())
+                .args(["rule-set", "compile"])
+                .arg(rule_json)
+                .arg("-o")
+                .arg(&rule_bin)
+                .status()
+                .unwrap();
+            assert!(compiled.success());
             setup
-                .run(Job::Import(Source::Text(
-                    "socks5://localhost:9#Second".into(),
-                )))
+                .run(Job::ImportRuleSet(
+                    "fixture".into(),
+                    exodys::rule_sets::Source::File(rule_bin),
+                ))
+                .unwrap();
+            let second_id = import_subscription_fixture(&mut setup);
+            setup
+                .run(Job::StartSync(
+                    shared.path().to_owned(),
+                    zeroize::Zeroizing::new(sync_passphrase.into()),
+                ))
                 .unwrap();
             let snapshot = setup.snapshot();
             let tokyo = snapshot
@@ -70,11 +164,31 @@ mod macos {
                 .iter()
                 .find(|n| n.name == "Tokyo relay")
                 .unwrap();
-            exodys::catalog::NodeRef {
-                profile: id,
-                node: tokyo.id.clone(),
-            }
+            (
+                exodys::catalog::NodeRef {
+                    profile: id,
+                    node: tokyo.id.clone(),
+                },
+                exodys::catalog::NodeRef {
+                    profile: second_id,
+                    node: snapshot.catalog.profile(second_id).unwrap().nodes[0]
+                        .id
+                        .clone(),
+                },
+            )
         };
+        {
+            let peer_directory = tempfile::tempdir().unwrap();
+            let mut peer = Session::open(peer_directory.path().into()).unwrap();
+            peer.run(Job::StartSync(
+                shared.path().to_owned(),
+                zeroize::Zeroizing::new(sync_passphrase.into()),
+            ))
+            .unwrap();
+            peer.run(Job::Rename(expected_selection.profile, "另一台 Mac".into()))
+                .unwrap();
+            peer.run(Job::SyncTick).unwrap();
+        }
 
         let mtm = MainThreadMarker::new().expect("AppKit runs on the main thread");
         let app = NSApplication::sharedApplication(mtm);
@@ -128,13 +242,69 @@ mod macos {
             (width >= narrow_width + 210.0).then_some(())
         });
         assert_list_row(&nodes, &["Osaka relay 001", "localhost:9", "SOCKS5"]);
+        if let Some(path) = screenshots.as_deref() {
+            let frame = unsafe { root.superview() }.unwrap();
+            for (name, dark, ext) in [
+                (unsafe { NSAppearanceNameAqua }, false, "lists-light.png"),
+                (unsafe { NSAppearanceNameDarkAqua }, true, "lists-dark.png"),
+            ] {
+                app.setAppearance(Some(&NSAppearance::appearanceNamed(name).unwrap()));
+                let bitmap = until(ext, || {
+                    autoreleasepool(|_| {
+                        if &*root.effectiveAppearance().name() != name {
+                            return None;
+                        }
+                        let bitmap = capture(&frame);
+                        // Sample the blank margin at the right edge of the canvas.
+                        let color = bitmap
+                            .colorAtX_y(bitmap.pixelsWide() * 99 / 100, bitmap.pixelsHigh() / 2)?
+                            .colorUsingColorSpace(&NSColorSpace::sRGBColorSpace())?;
+                        ((color.redComponent() < 0.5) == dark).then_some(bitmap)
+                    })
+                });
+                save_screenshot(&bitmap, &path.with_extension(ext));
+            }
+            app.setAppearance(None);
+        }
         window.setContentSize(NSSize::new(740.0, 560.0));
+        until("node list fits narrow window again", || {
+            ((nodes.rectOfColumn(0).size.width - narrow_width).abs() < 2.0).then_some(())
+        });
         println!(
             "Mounted native tables with 129 nodes in {:.1} ms",
             start.elapsed().as_secs_f64() * 1000.0
         );
         select(&profiles, 1);
         table(&root, "native-node-table", 1);
+        press(&root, "更新周期");
+        let cycle_field = until("refresh cycle field", || {
+            let host = by_id(&root, "refresh-hours")?;
+            find(&host, &|view| view.downcast_ref::<NSTextField>().is_some())?
+                .downcast::<NSTextField>()
+                .ok()
+        });
+        assert!(window.makeFirstResponder(Some(&cycle_field)));
+        let cycle = until("editable refresh cycle", || {
+            cycle_field.currentEditor()?.downcast::<NSTextView>().ok()
+        });
+        unsafe {
+            cycle.insertText_replacementRange(
+                &NSString::from_str("0"),
+                NSRange::new(0, cycle.string().length()),
+            );
+        }
+        press(&root, "保存周期");
+        table(&root, "native-node-table", 1);
+        let catalog: exodys::catalog::Catalog =
+            serde_json::from_slice(&std::fs::read(directory.path().join("profiles.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            catalog
+                .profile(second_selection.profile)
+                .unwrap()
+                .refresh_hours,
+            Some(0)
+        );
         select(&profiles, 0);
         table(&root, "native-node-table", 129);
         press(&root, "重命名");
@@ -170,12 +340,48 @@ mod macos {
             "本机演示"
         );
         press(&root, "本地端口设置");
+        // A fresh workspace has no TUN DNS, so clicking Connect TUN never contacts launchd.
+        press(&root, "连接 TUN");
+        button(&root, "连接 TUN");
+        assert!(connection_status(&root).unwrap().starts_with("已断开"));
         press(&root, "启用系统代理模式");
         press(&root, "关闭系统代理模式");
         button(&root, "启用系统代理模式"); // Leave the real network untouched before connecting.
+        press(&root, "启用定时更新");
+        press(&root, "关闭定时更新");
+        button(&root, "启用定时更新");
         button(&root, "导出设置");
         button(&root, "恢复设置");
+        press(&root, "规则集");
+        until("native rule set name field", || {
+            by_id(&root, "rule-set-name")
+        });
+        button(&root, "选择 .srs 文件");
+        press(&root, "HTTPS 地址");
+        fill_field(&window, &root, "rule-set-name", "fixture");
+        fill_field(
+            &window,
+            &root,
+            "rule-set-url",
+            "https://127.0.0.1:1/fixture.srs",
+        );
+        button(&root, "导入新规则集");
+        press(&root, "保存定时来源");
+        button(&root, "立即更新");
+        if let Some(path) = screenshots.as_deref() {
+            let frame = unsafe { root.superview() }.unwrap();
+            screenshot(&frame, &path.with_extension("library.png"));
+        }
+        press(&root, "停止定时更新");
+        until("rule set tracking disabled", || {
+            let data = std::fs::read(directory.path().join("preferences.json")).ok()?;
+            let prefs: exodys::catalog::Preferences = serde_json::from_slice(&data).ok()?;
+            prefs.rule_set_updates.is_empty().then_some(())
+        });
+        press(&root, "取消");
+        press(&root, "本地端口设置");
         press(&root, "分流规则");
+        button(&root, "从 YAML 载入草稿");
         button(&root, "保存规则");
         let rules = until("native routing editor", || {
             find(&root, &|v| {
@@ -251,6 +457,113 @@ mod macos {
         );
         assert!(window.makeFirstResponder(None));
 
+        press(&root, "策略组");
+        let policy_field = until("policy name field", || {
+            let host = by_id(&root, "policy-name")?;
+            find(&host, &|view| view.downcast_ref::<NSTextField>().is_some())?
+                .downcast::<NSTextField>()
+                .ok()
+        });
+        assert!(window.makeFirstResponder(Some(&policy_field)));
+        let policy_editor = until("editable policy name", || {
+            policy_field.currentEditor()?.downcast::<NSTextView>().ok()
+        });
+        unsafe {
+            policy_editor
+                .insertText_replacementRange(&NSString::from_str("demo"), NSRange::new(0, 0));
+        }
+        press(&root, "创建策略组");
+        press(&root, "加入所选节点");
+        press(&root, "设为手动出口");
+        until("selected policy outlet", || {
+            let prefs: exodys::catalog::Preferences = serde_json::from_slice(
+                &std::fs::read(directory.path().join("preferences.json")).ok()?,
+            )
+            .ok()?;
+            (prefs.policy_groups.first()?.mode
+                == exodys::catalog::PolicyMode::Manual(Some(expected_selection.clone())))
+            .then_some(())
+        });
+        button(&root, "启用组内自动选择");
+        if let Some(path) = screenshots.as_deref() {
+            let frame = unsafe { root.superview() }.unwrap();
+            screenshot(&frame, &path.with_extension("policies.png"));
+        }
+        press(&root, "返回节点");
+
+        // Exercise the automatic group through the real window while disconnected.
+        press(&root, "将所选节点加入自动组");
+        until("first automatic member", || {
+            let prefs: exodys::catalog::Preferences = serde_json::from_slice(
+                &std::fs::read(directory.path().join("preferences.json")).ok()?,
+            )
+            .ok()?;
+            prefs
+                .auto_members
+                .contains(&expected_selection)
+                .then_some(())
+        });
+        select(&profiles, 1);
+        let second = table(&root, "native-node-table", 1);
+        select(&second, 0);
+        until("second profile selection", || {
+            let prefs: exodys::catalog::Preferences = serde_json::from_slice(
+                &std::fs::read(directory.path().join("preferences.json")).ok()?,
+            )
+            .ok()?;
+            (prefs.selected.as_ref() == Some(&second_selection)).then_some(())
+        });
+        press(&root, "将所选节点加入自动组");
+        until("cross-profile automatic group", || {
+            let prefs: exodys::catalog::Preferences = serde_json::from_slice(
+                &std::fs::read(directory.path().join("preferences.json")).ok()?,
+            )
+            .ok()?;
+            (prefs.auto_members.contains(&expected_selection)
+                && prefs.auto_members.contains(&second_selection))
+            .then_some(())
+        });
+        press(&root, "自动选择组");
+        press(&root, "启用自动模式");
+        until("automatic mode enabled", || {
+            let prefs: exodys::catalog::Preferences = serde_json::from_slice(
+                &std::fs::read(directory.path().join("preferences.json")).ok()?,
+            )
+            .ok()?;
+            (prefs.auto_enabled && connection_status(&root)?.contains("自动选择组")).then_some(())
+        });
+        if let Some(path) = screenshots.as_deref() {
+            let frame = unsafe { root.superview() }.unwrap();
+            screenshot(&frame, &path.with_extension("automatic.png"));
+        }
+        press(&root, "切换到手动模式");
+        until("manual mode restored", || {
+            let prefs: exodys::catalog::Preferences = serde_json::from_slice(
+                &std::fs::read(directory.path().join("preferences.json")).ok()?,
+            )
+            .ok()?;
+            (!prefs.auto_enabled).then_some(())
+        });
+        press(&root, "移除");
+        until("group member removed", || {
+            let prefs: exodys::catalog::Preferences = serde_json::from_slice(
+                &std::fs::read(directory.path().join("preferences.json")).ok()?,
+            )
+            .ok()?;
+            (prefs.auto_members.len() == 1).then_some(())
+        });
+        press(&root, "返回节点");
+        select(&profiles, 0);
+        let nodes = table(&root, "native-node-table", 129);
+        select(&nodes, 128);
+        until("manual Tokyo selection restored", || {
+            let prefs: exodys::catalog::Preferences = serde_json::from_slice(
+                &std::fs::read(directory.path().join("preferences.json")).ok()?,
+            )
+            .ok()?;
+            (prefs.selected.as_ref() == Some(&expected_selection)).then_some(())
+        });
+
         assert!(find_button(&connection_actions, "测试代理").is_none());
         until("manual selection in sidebar", || {
             (connection_status(&root)? == "已断开 · Tokyo relay").then_some(())
@@ -290,6 +603,39 @@ mod macos {
         until("disconnected status in sidebar", || {
             (connection_status(&root)? == "已断开 · Tokyo relay").then_some(())
         });
+        press(&root, "本地端口设置");
+        press(&root, "备份与同步");
+        press(&root, "自动同步…");
+        press(&root, "解锁自动同步");
+        fill_field(&window, &root, "sync-passphrase", sync_passphrase);
+        assert!(window.makeFirstResponder(None));
+        let secure = until("native sync passphrase field", || {
+            let host = by_id(&root, "sync-passphrase")?;
+            find(&host, &|view| {
+                view.downcast_ref::<NSSecureTextField>().is_some()
+            })?
+            .downcast::<NSSecureTextField>()
+            .ok()
+        });
+        assert_eq!(secure.stringValue().length(), sync_passphrase.len());
+        let target = secure.target().unwrap();
+        assert!(unsafe {
+            app.sendAction_to_from(secure.action().unwrap(), Some(&target), Some(&secure))
+        });
+        wait_for_revision(shared.path(), 3);
+        press(&root, "立即同步");
+        // Debug builds can spend several seconds deriving each revision key.
+        let keep_local = wait_for("sync conflict", Duration::from_secs(30), || {
+            find_button(&root, "保留此设备…")
+        });
+        unsafe { keep_local.performClick(None) };
+        press(&root, "确认同步版本");
+        wait_for_revision(shared.path(), 4);
+        press(&root, "暂停同步");
+        button(&root, "解锁自动同步");
+        press(&root, "返回备份");
+        press(&root, "返回设置");
+        press(&root, "取消");
         press(&connection_actions, "连接");
         until("listener restarted", || listening(port).then_some(()));
         button(&connection_actions, "断开");
@@ -298,11 +644,31 @@ mod macos {
         until("listener closed after quit", || {
             (!listening(port)).then_some(())
         });
-        println!("Native search, connect, disconnect and teardown passed.");
+        println!("Native search, sync conflict resolution, pause and proxy lifecycle passed.");
     }
 
-    fn until<T>(label: &str, mut condition: impl FnMut() -> Option<T>) -> T {
-        let deadline = Instant::now() + Duration::from_secs(8);
+    fn wait_for_revision(directory: &Path, count: usize) {
+        wait_for("encrypted sync revision", Duration::from_secs(30), || {
+            let revisions = std::fs::read_dir(directory)
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry
+                        .path()
+                        .extension()
+                        .is_some_and(|ext| ext == "exodyssync")
+                })
+                .count();
+            (revisions == count).then_some(())
+        });
+    }
+
+    fn until<T>(label: &str, condition: impl FnMut() -> Option<T>) -> T {
+        wait_for(label, Duration::from_secs(8), condition)
+    }
+
+    fn wait_for<T>(label: &str, timeout: Duration, mut condition: impl FnMut() -> Option<T>) -> T {
+        let deadline = Instant::now() + timeout;
         loop {
             if let Some(value) = condition() {
                 return value;
@@ -452,9 +818,17 @@ mod macos {
     }
 
     fn screenshot(view: &NSView, path: &Path) {
+        save_screenshot(&capture(view), path);
+    }
+
+    fn capture(view: &NSView) -> Retained<NSBitmapImageRep> {
         let bounds = view.bounds();
         let bitmap = view.bitmapImageRepForCachingDisplayInRect(bounds).unwrap();
         view.cacheDisplayInRect_toBitmapImageRep(bounds, &bitmap);
+        bitmap
+    }
+
+    fn save_screenshot(bitmap: &NSBitmapImageRep, path: &Path) {
         let properties =
             NSDictionary::<NSBitmapImageRepPropertyKey, native::objc2::runtime::AnyObject>::new();
         // Empty output settings are valid for PNG.

@@ -1,5 +1,12 @@
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::{
+    LazyLock, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
+
+use zeroize::Zeroizing;
 
 use nsh_platform_macos::{
     ComponentContext, Components, NativeComponent,
@@ -9,7 +16,7 @@ use nsh_platform_macos::{
     },
     objc2_app_kit::{
         NSAccessibility, NSAutoresizingMaskOptions, NSBorderType, NSControl,
-        NSControlTextEditingDelegate, NSScrollView, NSTextDelegate, NSTextField,
+        NSControlTextEditingDelegate, NSScrollView, NSSecureTextField, NSTextDelegate, NSTextField,
         NSTextFieldDelegate, NSTextInputClient, NSTextView, NSTextViewDelegate, NSView,
     },
     objc2_foundation::{
@@ -23,6 +30,10 @@ const TEXT_AREA: &str = "exodys/text-area";
 
 pub(super) fn register(components: &Components) {
     components.register(
+        "exodys/secure-text-field",
+        Rc::new(|context| Box::new(SecureTextField::new(context))),
+    );
+    components.register(
         TEXT_FIELD,
         Rc::new(|context| Box::new(TextField::new(context))),
     );
@@ -31,6 +42,108 @@ pub(super) fn register(components: &Components) {
         Rc::new(|context| Box::new(TextArea::new(context))),
     );
 }
+
+// AppKit and the Rust UI run on separate threads. Only the input ID travels
+// through NSH's JSON event. Unconsumed input is cleared on unmount.
+static SECURE_INPUT_ID: AtomicU64 = AtomicU64::new(1);
+static SECURE_INPUTS: LazyLock<Mutex<HashMap<u64, Zeroizing<String>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+pub(crate) fn take_secure_input(id: u64) -> Option<Zeroizing<String>> {
+    SECURE_INPUTS.lock().ok()?.remove(&id)
+}
+
+struct SecureTextField {
+    field: Retained<NSSecureTextField>,
+    target: Retained<SecureTextFieldTarget>,
+}
+
+impl SecureTextField {
+    fn new(context: ComponentContext) -> Self {
+        let mtm = MainThreadMarker::new().expect("native components require the main thread");
+        let field = NSSecureTextField::initWithFrame(
+            NSSecureTextField::alloc(mtm),
+            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(240.0, 32.0)),
+        );
+        field.setAccessibilityLabel(Some(&NSString::from_str("备份口令")));
+        field.setPlaceholderString(Some(&NSString::from_str("输入口令后按回车")));
+        let target: Retained<SecureTextFieldTarget> = unsafe {
+            msg_send![
+                super(
+                    SecureTextFieldTarget::alloc(mtm).set_ivars(SecureTextFieldState {
+                        context,
+                        id: SECURE_INPUT_ID.fetch_add(1, Ordering::Relaxed),
+                    })
+                ),
+                init
+            ]
+        };
+        unsafe {
+            field.setTarget(Some(&*target));
+            field.setAction(Some(sel!(submit:)));
+        }
+        Self { field, target }
+    }
+}
+
+fn clear_secure_field(field: &NSSecureTextField) {
+    if let Some(editor) = field
+        .currentEditor()
+        .and_then(|editor| editor.downcast::<NSTextView>().ok())
+    {
+        editor.setString(&NSString::new());
+    }
+    field.setStringValue(&NSString::new());
+}
+
+impl Drop for SecureTextField {
+    fn drop(&mut self) {
+        clear_secure_field(&self.field);
+        take_secure_input(self.target.ivars().id);
+    }
+}
+
+impl NativeComponent for SecureTextField {
+    fn view(&self) -> Retained<NSView> {
+        let field: Retained<NSTextField> = Retained::into_super(self.field.clone());
+        let control: Retained<NSControl> = Retained::into_super(field);
+        Retained::into_super(control)
+    }
+
+    fn set_prop(&mut self, _name: &str, _value: Option<&Value>) {}
+}
+
+struct SecureTextFieldState {
+    context: ComponentContext,
+    id: u64,
+}
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = SecureTextFieldState]
+    #[name = "ExodysSecureTextFieldTarget"]
+    struct SecureTextFieldTarget;
+
+    unsafe impl NSObjectProtocol for SecureTextFieldTarget {}
+
+    impl SecureTextFieldTarget {
+        #[unsafe(method(submit:))]
+        fn submit(&self, sender: Option<&NSSecureTextField>) {
+            let Some(sender) = sender else { return };
+            let value = Zeroizing::new(sender.stringValue().to_string());
+            clear_secure_field(sender);
+            let state = self.ivars();
+            if let Ok(mut inputs) = SECURE_INPUTS.lock()
+                && let std::collections::hash_map::Entry::Vacant(entry) = inputs.entry(state.id)
+            {
+                entry.insert(value);
+                drop(inputs);
+                state.context.emit("submit", Value::from(state.id));
+            }
+        }
+    }
+);
 
 struct TextField {
     field: Retained<NSTextField>,

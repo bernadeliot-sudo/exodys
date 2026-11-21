@@ -485,22 +485,27 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "cc",
+ "flate2",
  "fs2",
+ "libc",
  "nsh-base",
  "nsh-core",
  "nsh-platform-macos",
  "nsh-platform-windows",
  "objc2-app-kit",
  "percent-encoding",
+ "ring",
  "same-file",
  "serde",
  "serde-saphyr",
  "serde_json",
+ "socket2",
  "tempfile",
  "ureq",
  "url",
  "windows",
  "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]

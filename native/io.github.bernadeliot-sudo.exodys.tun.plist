@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.github.bernadeliot-sudo.exodys.tun</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Library/PrivilegedHelperTools/io.github.bernadeliot-sudo.exodys.tun/exodys-tun-service</string>
+    </array>
+    <key>Sockets</key>
+    <dict>
+        <key>Client</key>
+        <dict>
+            <key>SockPathName</key>
+            <string>/var/run/exodys-tun.sock</string>
+            <key>SockPathOwner</key>
+            <integer>0</integer>
+            <key>SockPathMode</key>
+            <integer>384</integer>
+        </dict>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>1</integer>
+    <key>ExitTimeOut</key>
+    <integer>12</integer>
+</dict>
+</plist>

@@ -205,6 +205,10 @@ fn sip008_entry(value: &Value) -> Entry {
     Some((required(value, "remarks").unwrap_or(host).to_owned(), node))
 }
 
+pub(crate) fn valid_saved_outbound(fields: &Map<String, Value>) -> bool {
+    sing_box_entry(&Value::Object(fields.clone())).is_some()
+}
+
 fn sing_box_entry(value: &Value) -> Entry {
     let fields = value.as_object()?;
     let protocol = fields.get("type")?.as_str()?;
@@ -232,10 +236,11 @@ fn sing_box_entry(value: &Value) -> Entry {
     Some((name, node))
 }
 
-fn has_local_refs(value: &Value) -> bool {
+pub(crate) fn has_local_refs(value: &Value) -> bool {
     match value {
         Value::Array(items) => items.iter().any(has_local_refs),
         Value::Object(map) => map.iter().any(|(key, item)| {
+            let key = key.to_ascii_lowercase();
             key.ends_with("_path")
                 || key.ends_with("_paths")
                 || matches!(

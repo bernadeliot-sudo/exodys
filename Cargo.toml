@@ -2,6 +2,7 @@
 name = "exodys"
 version = "0.1.0"
 edition = "2024"
+default-run = "exodys"
 rust-version = "1.100"
 description = "Native desktop client for proxy profiles and sing-box"
 license = "Apache-2.0"
@@ -9,14 +10,17 @@ publish = false
 
 [dependencies]
 base64 = "0.22"
+flate2 = "1"
 fs2 = "0.4"
 percent-encoding = "2.3"
+ring = "0.17"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 serde-saphyr = { version = "1.3", default-features = false, features = ["deserialize"] }
 tempfile = "3"
 ureq = "3.5"
 url = "2.5"
+zeroize = "1.9"
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 nsh-core = "=0.6.1"
@@ -29,11 +33,13 @@ windows = { version = "0.62", default-features = false, features = ["Win32_Graph
 windows-sys = { version = "0.61", features = ["Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+socket2 = "0.6"
 nsh-platform-macos = { version = "=0.6.1", default-features = false }
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = [
     "std", "NSAccessibility", "NSAccessibilityProtocols", "NSButton", "NSCell", "NSClipView", "NSColor",
     "NSImage", "NSToolbar", "NSToolbarItem", "NSWindow",
-    "NSControl", "NSLayoutConstraint", "NSResponder", "NSScrollView", "NSSearchField",
+    "NSControl", "NSLayoutConstraint", "NSResponder", "NSScrollView", "NSSearchField", "NSSecureTextField",
     "NSTableCellView", "NSTableColumn", "NSTableHeaderView", "NSTableView", "NSTextField", "NSTextInputClient", "NSTextView", "NSView", "NSUserInterfaceItemIdentification",
 ] }
 

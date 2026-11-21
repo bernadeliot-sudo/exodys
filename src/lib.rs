@@ -1,11 +1,17 @@
+mod backup;
 pub mod catalog;
 pub mod engine;
 pub mod import;
 mod routing;
+pub mod rule_sets;
 pub mod session;
 mod settings_file;
+mod sync;
 #[cfg(target_os = "macos")]
 pub mod system_proxy;
+mod tun;
+#[doc(hidden)]
+pub mod tun_config;
 #[cfg(not(target_os = "macos"))]
 mod system_proxy {
     use crate::Result;

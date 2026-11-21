@@ -1,10 +1,18 @@
+#[cfg(target_os = "macos")]
+mod backup;
+mod group;
+mod policies;
+mod rule_sets;
 mod settings_file;
+#[cfg(target_os = "macos")]
+mod sync;
 #[cfg(target_os = "windows")]
 mod windows;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use nsh_base::toolbar;
 use nsh_core::desktop::WindowAttributes;
 #[cfg(target_os = "macos")]
 use nsh_core::desktop::{TitleBarOptions, TitleBarStyle};
@@ -58,6 +66,24 @@ pub fn App() -> impl IntoElement {
             session.close_window();
         }
     });
+    let scheduled = computed(move || {
+        ui.state.with(|state| {
+            state.preferences.scheduled_refresh || !state.preferences.rule_set_updates.is_empty()
+        })
+    });
+    effect(move || {
+        if scheduled.get() {
+            set_interval(Duration::from_secs(60), move || ui.refresh_due());
+        }
+    });
+    #[cfg(target_os = "macos")]
+    let syncing = computed(move || ui.state.with(|state| state.sync.unlocked));
+    #[cfg(target_os = "macos")]
+    effect(move || {
+        if syncing.get() {
+            set_interval(Duration::from_secs(60), move || ui.sync_due());
+        }
+    });
     let connected = computed(move || ui.state.with(|state| state.connected));
     effect(move || {
         if connected.get() {
@@ -88,9 +114,17 @@ pub fn App() -> impl IntoElement {
                             Page::Nodes => nodes(ui).into_element(),
                             Page::Import => import_form(ui).into_element(),
                             Page::Rename(id) => rename_form(ui, id).into_element(),
+                            Page::RefreshCycle(id) => refresh_cycle_form(ui, id).into_element(),
                             Page::Remove(id) => remove_form(ui, id).into_element(),
                             Page::Settings => settings_form(ui).into_element(),
+                            #[cfg(target_os = "macos")]
+                            Page::Backup => backup::page(ui).into_element(),
+                            #[cfg(target_os = "macos")]
+                            Page::Sync => sync::page(ui).into_element(),
                             Page::Routing => routing_form(ui).into_element(),
+                            Page::Group => group::page(ui).into_element(),
+                            Page::RuleSets => rule_sets::page(ui).into_element(),
+                            Page::Policies => policies::page(ui).into_element(),
                         })),
                 ),
         )
@@ -101,9 +135,17 @@ enum Page {
     Nodes,
     Import,
     Rename(u64),
+    RefreshCycle(u64),
     Remove(u64),
     Settings,
+    #[cfg(target_os = "macos")]
+    Backup,
+    #[cfg(target_os = "macos")]
+    Sync,
     Routing,
+    RuleSets,
+    Policies,
+    Group,
 }
 
 #[derive(Clone, PartialEq)]
@@ -114,6 +156,7 @@ struct Notice {
 
 #[derive(Clone, Copy)]
 struct Ui {
+    owner: Owner,
     session: Signal<Option<Arc<Mutex<Session>>>>,
     state: Signal<Snapshot>,
     focus: Signal<Option<u64>>,
@@ -127,6 +170,7 @@ struct Ui {
 impl Ui {
     fn new() -> Self {
         Self {
+            owner: Owner::current(),
             session: signal_with(None, SignalEquals::Never),
             state: signal(Snapshot::default()),
             focus: signal(None),
@@ -211,11 +255,14 @@ impl Ui {
         let Some(session) = self.session.get_untracked() else {
             return;
         };
+        let sync_tick = matches!(&job, Job::SyncTick);
         batch(|| {
-            self.notice.set(None);
+            if !sync_tick {
+                self.notice.set(None);
+            }
             self.busy.set(Some(label));
         });
-        spawn(async move {
+        let task = async move {
             let result = blocking(move || {
                 let mut session = session
                     .lock()
@@ -242,11 +289,15 @@ impl Ui {
                                 if close_form {
                                     self.draft.set(String::new());
                                     self.navigate(outcome.focus.or(focus).or(fallback));
+                                } else if focus.is_none() {
+                                    self.focus.set(fallback);
                                 }
-                                self.notice.set(outcome.message.map(|message| Notice {
-                                    message,
-                                    error: false,
-                                }));
+                                if !sync_tick || outcome.message.is_some() {
+                                    self.notice.set(outcome.message.map(|message| Notice {
+                                        message,
+                                        error: false,
+                                    }));
+                                }
                             }
                             Err(message) => self.error(message),
                         }
@@ -256,7 +307,37 @@ impl Ui {
                 }
                 self.busy.set(None);
             });
-        });
+        };
+        // A form can unmount its own button before the session task finishes.
+        self.owner.run(|| spawn(task));
+    }
+
+    fn refresh_due(self) {
+        if self.busy.get_untracked().is_some()
+            || !matches!(self.page.get_untracked(), Page::Nodes | Page::Group)
+        {
+            return;
+        }
+        let due = self
+            .session
+            .get_untracked()
+            .is_some_and(|session| session.try_lock().is_ok_and(|s| s.has_due_refresh()));
+        if due {
+            self.work("检查定时更新…", Job::RefreshDue, false);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sync_due(self) {
+        if matches!(
+            self.page.get_untracked(),
+            Page::Nodes | Page::Group | Page::Sync
+        ) && self
+            .state
+            .with_untracked(|state| !state.connected && state.sync.unlocked)
+        {
+            self.work("检查自动同步…", Job::SyncTick, false);
+        }
     }
 
     fn check_connection(self) {
@@ -397,6 +478,18 @@ fn sidebar(ui: Ui) -> impl IntoElement {
                 list
             }
         }))
+        .child(action(
+            "策略组",
+            Tone::Standard,
+            move || ui.busy.get().is_some() || ui.session.with(Option::is_none),
+            move || ui.form(Page::Policies, ""),
+        ))
+        .child(action(
+            "自动选择组",
+            Tone::Standard,
+            move || ui.busy.get().is_some() || ui.session.with(Option::is_none),
+            move || ui.page.set(Page::Group),
+        ))
         .child(
             text(move || ui.state.with(connection_status))
                 .test_id("connection-status")
@@ -416,10 +509,26 @@ fn sidebar(ui: Ui) -> impl IntoElement {
                         .flex_1()
                         .min_w(px(0.0))
                         .gap(px(3.0))
-                        .child(text("本地代理").text_color(SUBTLE).text_size(px(11.0)))
                         .child(
                             text(move || {
-                                ui.state.with(|s| address(s.preferences.port).to_string())
+                                if ui.state.with(|s| s.tun_active) {
+                                    "连接模式"
+                                } else {
+                                    "本地代理"
+                                }
+                            })
+                            .text_color(SUBTLE)
+                            .text_size(px(11.0)),
+                        )
+                        .child(
+                            text(move || {
+                                ui.state.with(|s| {
+                                    if s.tun_active {
+                                        "TUN".to_owned()
+                                    } else {
+                                        address(s.preferences.port).to_string()
+                                    }
+                                })
                             })
                             .text_size(px(13.0))
                             .truncate(),
@@ -469,14 +578,25 @@ fn icon_action(
     control
 }
 
+fn connection_node(state: &Snapshot) -> Option<&str> {
+    if state.preferences.auto_enabled {
+        (!state.preferences.auto_members.is_empty()).then_some("自动选择组")
+    } else {
+        state.node().map(|node| node.name.as_str())
+    }
+}
+
 fn connection_status(state: &Snapshot) -> String {
     let status = if state.connected {
         "运行中"
     } else {
         "已断开"
     };
-    let node = state.node().map_or("未选择节点", |node| node.name.as_str());
-    format!("{status} · {node}")
+    match (state.tun_active, connection_node(state)) {
+        (true, Some(node)) => format!("{status} · TUN · {node}"),
+        (true, None) => format!("{status} · TUN"),
+        (false, node) => format!("{status} · {}", node.unwrap_or("未选择节点")),
+    }
 }
 
 fn connection(ui: Ui) -> impl IntoElement {
@@ -495,13 +615,16 @@ fn connection(ui: Ui) -> impl IntoElement {
                     }
                 },
                 move || {
-                    ui.busy.get().is_some() || ui.state.with(|s| !s.connected && s.node().is_none())
+                    ui.busy.get().is_some()
+                        || ui
+                            .state
+                            .with(|s| !s.connected && connection_node(s).is_none())
                 },
                 Tone::Primary,
                 move || {
                     if ui.state.with_untracked(|s| s.connected) {
                         ui.work("断开连接…", Job::Disconnect, false);
-                    } else if ui.state.with_untracked(|s| s.node().is_some()) {
+                    } else if ui.state.with_untracked(|s| connection_node(s).is_some()) {
                         ui.work("启动本地代理…", Job::Connect, false);
                     }
                 },
@@ -510,14 +633,14 @@ fn connection(ui: Ui) -> impl IntoElement {
             .flex_1(),
         )
         .child(when(
-            move || ui.state.with(|s| s.connected),
+            move || ui.state.with(|s| s.connected && !s.tun_active),
             move || {
                 icon_action(
                     "测试代理",
                     "waveform.path.ecg",
                     move || ui.busy.get().is_some(),
                     move || {
-                        if ui.state.with_untracked(|s| s.connected) {
+                        if ui.state.with_untracked(|s| s.connected && !s.tun_active) {
                             ui.work(
                                 "通过代理发送测试请求…",
                                 Job::Probe("https://cp.cloudflare.com/generate_204".into()),
@@ -528,19 +651,26 @@ fn connection(ui: Ui) -> impl IntoElement {
                 )
             },
         ))
-        .child(icon_action(
-            "复制地址",
-            "doc.on.doc",
-            || false,
+        .child(when(
+            move || ui.state.with(|s| !s.tun_active),
             move || {
-                set_clipboard(
-                    ui.state
-                        .with_untracked(|s| address(s.preferences.port).to_string()),
-                );
-                ui.notice.set(Some(Notice {
-                    message: "已复制本地代理地址。".into(),
-                    error: false,
-                }));
+                icon_action(
+                    "复制地址",
+                    "doc.on.doc",
+                    || false,
+                    move || {
+                        if !ui.state.with_untracked(|s| s.tun_active) {
+                            set_clipboard(
+                                ui.state
+                                    .with_untracked(|s| address(s.preferences.port).to_string()),
+                            );
+                            ui.notice.set(Some(Notice {
+                                message: "已复制本地代理地址。".into(),
+                                error: false,
+                            }));
+                        }
+                    },
+                )
             },
         ))
 }
@@ -695,24 +825,24 @@ fn node_browser(ui: Ui, profile: Memo<Option<Arc<Profile>>>) -> impl IntoElement
     });
     let profile_id = computed(move || profile.with(|p| p.as_ref().map(|p| p.id)));
     let active = computed(move || {
-        ui.state.with(|state| {
-            state.connected
-                && state
-                    .preferences
-                    .selected
-                    .as_ref()
-                    .is_some_and(|node| Some(node.profile) == profile_id.get())
-        })
+        ui.state
+            .with(|state| profile_id.get().is_some_and(|id| state.profile_in_use(id)))
     });
     let selected = computed(move || ui.state.with(|state| state.preferences.selected.clone()));
-    let selection_disabled = move || ui.busy.get().is_some();
+    let selection_disabled = move || {
+        ui.busy.get().is_some()
+            || ui
+                .state
+                .with(|s| s.connected && (s.tun_active || s.preferences.auto_enabled))
+    };
     view()
         .flex_1()
         .min_h(px(0.0))
         .flex_col()
         .gap(px(11.0))
         .child(
-            view()
+            toolbar()
+                .accessibility_label("配置工具栏")
                 .flex_row()
                 .items_center()
                 .gap(px(8.0))
@@ -748,16 +878,34 @@ fn node_browser(ui: Ui, profile: Memo<Option<Arc<Profile>>>) -> impl IntoElement
                 .child(when(
                     move || profile.with(|p| p.as_ref().is_some_and(|p| p.subscription.is_some())),
                     move || {
-                        icon_action(
-                            "刷新订阅",
-                            "arrow.clockwise",
-                            move || ui.busy.get().is_some() || active.get(),
-                            move || {
-                                if let Some(id) = profile_id.get_untracked() {
-                                    ui.work("刷新订阅…", Job::Refresh(id), false);
-                                }
-                            },
-                        )
+                        view()
+                            .flex_row()
+                            .gap(px(4.0))
+                            .child(icon_action(
+                                "刷新订阅",
+                                "arrow.clockwise",
+                                move || ui.busy.get().is_some() || active.get(),
+                                move || {
+                                    if let Some(id) = profile_id.get_untracked() {
+                                        ui.work("刷新订阅…", Job::Refresh(id), false);
+                                    }
+                                },
+                            ))
+                            .child(icon_action(
+                                "更新周期",
+                                "clock",
+                                move || ui.busy.get().is_some(),
+                                move || {
+                                    if let Some(p) = profile.get_untracked() {
+                                        ui.form(
+                                            Page::RefreshCycle(p.id),
+                                            p.refresh_hours
+                                                .unwrap_or(crate::catalog::DEFAULT_REFRESH_HOURS)
+                                                .to_string(),
+                                        );
+                                    }
+                                },
+                            ))
                     },
                 ))
                 .child(icon_action(
@@ -781,7 +929,14 @@ fn node_browser(ui: Ui, profile: Memo<Option<Arc<Profile>>>) -> impl IntoElement
                     },
                 )),
         )
-        .child(search_field(ui).h(px(32.0)).min_w(px(180.0)))
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(px(8.0))
+                .child(search_field(ui).flex_1().h(px(32.0)).min_w(px(180.0)))
+                .child(group::member_button(ui, profile_id)),
+        )
         .child({
             #[cfg(target_os = "macos")]
             let list = native("exodys/node-table")
@@ -826,6 +981,9 @@ fn node_browser(ui: Ui, profile: Memo<Option<Arc<Profile>>>) -> impl IntoElement
                 })
                 .on_native_event(move |event: &NativeEvent| {
                     if &*event.name == "select"
+                        && !ui.state.with_untracked(|s| {
+                            s.connected && (s.tun_active || s.preferences.auto_enabled)
+                        })
                         && let Some(key) = event.data.as_str()
                         && let Some(id) = profile_id.get_untracked()
                     {
@@ -956,6 +1114,55 @@ fn rename_form(ui: Ui, id: u64) -> impl IntoElement {
         )
 }
 
+fn refresh_cycle_form(ui: Ui, id: u64) -> impl IntoElement {
+    let save = move || match ui.draft.get_untracked().trim().parse::<u16>() {
+        Ok(hours) if hours <= crate::catalog::MAX_REFRESH_HOURS => {
+            ui.work("保存更新周期…", Job::SetRefreshHours(id, hours), true);
+        }
+        _ => ui.error("请输入 0 至 720 之间的整数。"),
+    };
+    form_panel("订阅更新周期")
+        .child(
+            text("开启定时更新后，按此周期间隔刷新。默认 24 小时，填 0 则只手动刷新这条订阅。")
+                .text_color(SUBTLE),
+        )
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    editor(
+                        "exodys/text-field",
+                        ui.draft,
+                        "24",
+                        "refresh-hours",
+                        save,
+                        EditorOptions {
+                            max_length: Some(3),
+                            ..EditorOptions::default()
+                        },
+                    )
+                    .h(px(28.0))
+                    .w(px(90.0)),
+                )
+                .child(text("小时")),
+        )
+        .child(
+            view()
+                .flex_row()
+                .justify_end()
+                .gap(px(8.0))
+                .child(cancel(ui))
+                .child(action(
+                    "保存周期",
+                    Tone::Primary,
+                    move || ui.busy.get().is_some(),
+                    save,
+                )),
+        )
+}
+
 fn remove_form(ui: Ui, id: u64) -> impl IntoElement {
     form_panel("删除配置？")
         .child(
@@ -1027,18 +1234,31 @@ fn settings_form(ui: Ui) -> impl IntoElement {
             move || ui.state.with(|s| s.connected),
             || text("断开连接后可修改端口。").text_color(SUBTLE),
         ))
-        .child(action(
-            "分流规则",
-            Tone::Standard,
-            move || ui.busy.get().is_some(),
-            move || {
-                ui.form(
-                    Page::Routing,
-                    ui.state
-                        .with_untracked(|s| s.preferences.routing_rules.clone()),
-                );
-            },
-        ))
+        .child(
+            view()
+                .flex_row()
+                .gap(px(8.0))
+                .child(action(
+                    "分流规则",
+                    Tone::Standard,
+                    move || ui.busy.get().is_some(),
+                    move || {
+                        ui.form(
+                            Page::Routing,
+                            ui.state
+                                .with_untracked(|s| s.preferences.routing_rules.clone()),
+                        );
+                    },
+                ))
+                .child(action(
+                    "规则集",
+                    Tone::Standard,
+                    move || ui.busy.get().is_some(),
+                    move || {
+                        ui.form(Page::RuleSets, "");
+                    },
+                )),
+        )
         .children({
             #[cfg(target_os = "macos")]
             let settings = macos_connection_settings(ui);
@@ -1046,7 +1266,55 @@ fn settings_form(ui: Ui) -> impl IntoElement {
             let settings = [] as [AnyElement; 0];
             settings
         })
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(px(8.0))
+                .child(native_button(
+                    move || {
+                        if ui.state.with(|s| s.preferences.scheduled_refresh) {
+                            "关闭定时更新"
+                        } else {
+                            "启用定时更新"
+                        }
+                    },
+                    move || ui.busy.get().is_some(),
+                    Tone::Standard,
+                    move || {
+                        ui.work(
+                            "保存更新设置…",
+                            Job::SetScheduledRefresh(
+                                !ui.state.with_untracked(|s| s.preferences.scheduled_refresh),
+                            ),
+                            false,
+                        )
+                    },
+                ))
+                .child(
+                    text("应用打开时按订阅周期更新；跳过当前连接使用的配置。")
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .text_size(px(13.0))
+                        .text_color(SUBTLE),
+                ),
+        )
         .child(settings_file::controls(ui))
+        .children({
+            #[cfg(target_os = "macos")]
+            let settings = [view()
+                .flex_row()
+                .child(action(
+                    "备份与同步",
+                    Tone::Standard,
+                    move || ui.busy.get().is_some(),
+                    move || ui.form(Page::Backup, ""),
+                ))
+                .into_element()];
+            #[cfg(target_os = "windows")]
+            let settings = [] as [AnyElement; 0];
+            settings
+        })
         .child(
             view()
                 .flex_row()
@@ -1072,8 +1340,54 @@ fn macos_connection_settings(ui: Ui) -> [AnyElement; 2] {
                 move || ui.busy.get().is_some() || ui.state.with(|s| s.connected), Tone::Standard,
                 move || ui.work("保存系统代理选项…", Job::SetSystemProxy(!ui.state.with_untracked(|s| s.preferences.system_proxy)), false),
             ))
-            .child(action("恢复系统代理", Tone::Standard, move || ui.busy.get().is_some() || ui.state.with(|s| s.connected), move || ui.work("检查系统代理…", Job::RecoverSystemProxy, false))).into_element(),
+            .child(action("恢复系统代理", Tone::Standard, move || ui.busy.get().is_some() || ui.state.with(|s| s.connected), move || ui.work("检查系统代理…", Job::RecoverSystemProxy, false)))
+            .child(native_button(
+                move || if ui.state.with(|s| s.tun_active) { "断开 TUN" } else { "连接 TUN" },
+                move || ui.busy.get().is_some() || ui.state.with(|s| s.connected && !s.tun_active),
+                Tone::Standard,
+                move || if ui.state.with_untracked(|s| s.tun_active) {
+                    ui.work("停止 TUN…", Job::Disconnect, false);
+                } else {
+                    ui.work("正在连接 TUN…", Job::ConnectTun, false);
+                },
+            )).into_element(),
     ]
+}
+
+fn pick_clash_rules(ui: Ui) {
+    if ui.busy.get_untracked().is_some() || ui.state.with_untracked(|s| s.connected) {
+        return;
+    }
+    ui.notice.set(None);
+    ui.busy.set(Some("选择规则文件…"));
+    let request = pick_paths(
+        OpenDialog::files()
+            .filter(FileFilter::new("Clash YAML", ["yaml", "yml"]))
+            .button_label("载入草稿"),
+    );
+    spawn(async move {
+        match request.await {
+            Ok(Some(paths)) => {
+                if let Some(path) = paths.into_iter().next() {
+                    ui.busy.set(Some("检查规则文件…"));
+                    match blocking(move || crate::routing::read_clash_rules(&path)).await {
+                        Ok(Ok(draft)) => {
+                            ui.draft.set(draft);
+                            ui.notice.set(Some(Notice {
+                                message: "已载入规则草稿。请检查后保存。".into(),
+                                error: false,
+                            }));
+                        }
+                        Ok(Err(error)) => ui.error(error),
+                        Err(_) => ui.error("读取规则文件时发生错误。"),
+                    }
+                }
+            }
+            Ok(None) => (),
+            Err(_) => ui.error("无法打开规则文件选择器。"),
+        }
+        ui.busy.set(None);
+    });
 }
 
 fn routing_form(ui: Ui) -> impl IntoElement {
@@ -1085,11 +1399,14 @@ fn routing_form(ui: Ui) -> impl IntoElement {
         )
     };
     form_panel("分流规则")
-        .child(text("从上到下匹配，未命中时走所选节点。每行一条，例如 DOMAIN-SUFFIX,example.org,DIRECT。").text_size(px(13.0)))
-        .child(text("支持 DOMAIN、DOMAIN-SUFFIX、DOMAIN-KEYWORD、IP-CIDR、IP-CIDR6 和 MATCH。动作可选 DIRECT（直连）、PROXY（所选节点）或 REJECT（拒绝）。").text_size(px(13.0)).text_color(SUBTLE))
-        .child(editor("exodys/text-area", ui.draft, "分流规则", "routing-rules", || {}, EditorOptions { readonly: Some(computed(move || ui.state.with(|s| s.connected))), ..EditorOptions::default() }).h(px(150.0)))
+        .child(text("从上到下匹配，未命中时按当前连接模式代理。每行一条，例如 DOMAIN-SUFFIX,example.org,DIRECT。").text_size(px(13.0)))
+        .child(text("支持 DOMAIN、DOMAIN-SUFFIX、DOMAIN-KEYWORD、IP-CIDR、IP-CIDR6、RULE-SET、GEOIP、GEOSITE 和 MATCH。动作可选 DIRECT、PROXY、REJECT 或 GROUP:组名。").text_size(px(13.0)).text_color(SUBTLE))
+        .child(editor("exodys/text-area", ui.draft, "分流规则", "routing-rules", || {}, EditorOptions { readonly: Some(computed(move || ui.busy.get().is_some() || ui.state.with(|s| s.connected))), ..EditorOptions::default() }).h(px(150.0)))
         .child(when(move || ui.state.with(|s| s.connected), || text("断开连接后可修改分流规则。")))
-        .child(view().flex_row().justify_end().gap(px(8.0)).child(cancel(ui)).child(action("保存规则", Tone::Primary,
+        .child(text("从 Clash YAML 载入会替换草稿；检查并保存后才生效。").text_size(px(13.0)).text_color(SUBTLE))
+        .child(view().flex_row().items_center().gap(px(8.0))
+            .child(action("从 YAML 载入草稿", Tone::Standard, move || ui.busy.get().is_some() || ui.state.with(|s| s.connected), move || pick_clash_rules(ui)))
+            .child(view().flex_1()).child(cancel(ui)).child(action("保存规则", Tone::Primary,
             move || ui.busy.get().is_some() || ui.state.with(|s| s.connected), save)))
 }
 
